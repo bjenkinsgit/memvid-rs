@@ -331,6 +331,17 @@ impl MemvidEncoder {
             std::fs::create_dir_all(parent).map_err(MemvidError::Io)?;
         }
 
+        // Remove existing database file to start fresh (this is an encode, not append)
+        let db_path = Path::new(database_file);
+        if db_path.exists() {
+            std::fs::remove_file(db_path).map_err(MemvidError::Io)?;
+            // Also remove WAL files if they exist
+            let wal_path = db_path.with_extension("db-wal");
+            let shm_path = db_path.with_extension("db-shm");
+            let _ = std::fs::remove_file(wal_path);
+            let _ = std::fs::remove_file(shm_path);
+        }
+
         let mut database = crate::storage::Database::new(database_file)?;
         database.insert_chunks(&self.chunks)?;
 

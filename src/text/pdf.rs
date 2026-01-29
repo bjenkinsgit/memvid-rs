@@ -4,6 +4,7 @@
 //! using both pdf-extract and lopdf crates for maximum compatibility.
 
 use crate::error::{MemvidError, Result};
+use std::panic;
 use std::path::Path;
 
 /// PDF text extraction processor
@@ -13,12 +14,19 @@ impl PdfProcessor {
     /// Extract text from a PDF file
     pub fn extract_text<P: AsRef<Path>>(path: P) -> Result<String> {
         let path = path.as_ref();
+        let path_buf = path.to_path_buf();
 
-        // Try using pdf-extract first (simpler)
-        match pdf_extract::extract_text(path) {
-            Ok(text) => Ok(text),
-            Err(e) => {
+        // Try using pdf-extract first (simpler), but catch panics from buggy font parsing
+        let pdf_extract_result = panic::catch_unwind(|| pdf_extract::extract_text(&path_buf));
+
+        match pdf_extract_result {
+            Ok(Ok(text)) => Ok(text),
+            Ok(Err(e)) => {
                 log::warn!("pdf-extract failed, trying lopdf: {}", e);
+                Self::extract_with_lopdf(path)
+            }
+            Err(_) => {
+                log::warn!("pdf-extract panicked (likely font parsing issue), trying lopdf");
                 Self::extract_with_lopdf(path)
             }
         }
