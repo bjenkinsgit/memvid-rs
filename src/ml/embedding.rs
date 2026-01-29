@@ -33,12 +33,20 @@ pub struct EmbeddingConfig {
 
 impl Default for EmbeddingConfig {
     fn default() -> Self {
+        // Auto-detect best available device based on compiled features
+        #[cfg(feature = "metal")]
+        let device_type = DeviceType::Metal;
+        #[cfg(all(feature = "cuda", not(feature = "metal")))]
+        let device_type = DeviceType::Cuda(0);
+        #[cfg(not(any(feature = "metal", feature = "cuda")))]
+        let device_type = DeviceType::Cpu;
+
         Self {
             model_name: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
             max_length: 384,
             normalize: true,
             batch_size: 32,
-            device_type: DeviceType::Cpu,
+            device_type,
         }
     }
 }
@@ -881,7 +889,12 @@ mod tests {
 
         assert_eq!(health.model_name, "sentence-transformers/all-MiniLM-L6-v2");
         assert_eq!(health.cache_size, 0);
-        assert!(health.device_type.contains("Cpu"));
+        // Device type depends on compiled features: Metal (default on macOS), CUDA, or CPU
+        assert!(
+            health.device_type.contains("Cpu")
+                || health.device_type.contains("Metal")
+                || health.device_type.contains("Cuda")
+        );
         // is_ready may be true or false depending on model loading
     }
 
