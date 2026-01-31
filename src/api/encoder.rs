@@ -631,19 +631,16 @@ impl MemvidEncoder {
         std::fs::write(&concat_list_file, concat_content).map_err(MemvidError::Io)?;
 
         // Use system FFmpeg for concat (more reliable than ffmpeg-next for this)
+        // Build args based on config
+        let mut args = Vec::new();
+        if self.config.video.ffmpeg_hide_banner {
+            args.push("-hide_banner");
+        }
+        args.extend(["-loglevel", &self.config.video.ffmpeg_cli_log_level]);
+        args.extend(["-f", "concat", "-safe", "0", "-i", &concat_list_file, "-c", "copy", "-y", output]);
+
         let output_status = std::process::Command::new("ffmpeg")
-            .args([
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                &concat_list_file,
-                "-c",
-                "copy",
-                "-y", // Overwrite output
-                output,
-            ])
+            .args(&args)
             .status()
             .map_err(|e| MemvidError::Video(format!("Failed to execute ffmpeg: {}", e)))?;
 

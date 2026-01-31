@@ -101,6 +101,30 @@ pub struct VideoConfig {
 
     /// Enable hardware acceleration
     pub hardware_acceleration: bool,
+
+    /// x265 encoder log level: none, error, warning, info, debug, full
+    #[serde(default = "default_x265_log_level")]
+    pub x265_log_level: String,
+
+    /// FFmpeg CLI log level for concat operations: quiet, panic, fatal, error, warning, info, verbose, debug, trace
+    #[serde(default = "default_ffmpeg_cli_log_level")]
+    pub ffmpeg_cli_log_level: String,
+
+    /// Hide FFmpeg CLI banner
+    #[serde(default = "default_ffmpeg_hide_banner")]
+    pub ffmpeg_hide_banner: bool,
+}
+
+fn default_x265_log_level() -> String {
+    "error".to_string()
+}
+
+fn default_ffmpeg_cli_log_level() -> String {
+    "error".to_string()
+}
+
+fn default_ffmpeg_hide_banner() -> bool {
+    true
 }
 
 /// Machine learning configuration
@@ -224,6 +248,11 @@ impl Default for VideoConfig {
         quality_params.insert("profile".to_string(), "main".to_string());
         quality_params.insert("pix_fmt".to_string(), "yuv420p".to_string());
 
+        let x265_log_level = default_x265_log_level();
+        // x265 log level - can be overridden via x265_log_level field
+        // Options: none, error, warning, info, debug, full
+        quality_params.insert("x265-params".to_string(), format!("log-level={}", x265_log_level));
+
         Self {
             codec: "libx265".to_string(), // H.265 exactly like Python
             fps: 30.0,                    // Python: video_fps: 30
@@ -231,7 +260,20 @@ impl Default for VideoConfig {
             frame_height: 256,            // Python: frame_height: 256
             quality_params,
             hardware_acceleration: true,
+            x265_log_level,
+            ffmpeg_cli_log_level: default_ffmpeg_cli_log_level(),
+            ffmpeg_hide_banner: default_ffmpeg_hide_banner(),
         }
+    }
+}
+
+impl VideoConfig {
+    /// Update x265 log level in quality_params (call after changing x265_log_level)
+    pub fn apply_x265_log_level(&mut self) {
+        self.quality_params.insert(
+            "x265-params".to_string(),
+            format!("log-level={}", self.x265_log_level)
+        );
     }
 }
 
