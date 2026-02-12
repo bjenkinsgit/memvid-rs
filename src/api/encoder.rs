@@ -32,7 +32,7 @@ impl MemvidEncoder {
         let video_encoder = VideoEncoder::new(config.video.clone());
 
         // Try to initialize embedding model for semantic search support
-        let embedding_model = match EmbeddingModel::new(EmbeddingConfig::default()).await {
+        let embedding_model = match EmbeddingModel::new(EmbeddingConfig::from_ml_config(&config.ml)).await {
             Ok(model) => {
                 log::info!(
                     "🧠 Embedding model initialized - semantic embeddings will be generated during encoding"

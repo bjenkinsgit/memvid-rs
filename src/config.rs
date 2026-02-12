@@ -280,7 +280,8 @@ impl VideoConfig {
 impl Default for MlConfig {
     fn default() -> Self {
         Self {
-            model_name: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+            model_name: std::env::var("MEMVID_MODEL_NAME")
+                .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".to_string()),
             device: "auto".to_string(),
             max_sequence_length: 512,
             batch_size: 32,

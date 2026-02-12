@@ -26,6 +26,8 @@ struct SharedBertModel {
     device: Device,
     /// Path to model files on disk (for loading tokenizer on reuse path)
     model_dir: PathBuf,
+    /// Model name used for this loaded model (for cache invalidation)
+    model_name: String,
 }
 
 // SAFETY: BertModel contains only Tensors (Arc-backed), Device, and tracing::Span —
@@ -62,12 +64,30 @@ impl Default for EmbeddingConfig {
         #[cfg(not(any(feature = "metal", feature = "cuda")))]
         let device_type = DeviceType::Cpu;
 
+        let model_name = std::env::var("MEMVID_MODEL_NAME")
+            .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".to_string());
+
         Self {
-            model_name: "sentence-transformers/all-MiniLM-L6-v2".to_string(),
+            model_name,
             max_length: 384,
             normalize: true,
             batch_size: 32,
             device_type,
+        }
+    }
+}
+
+impl EmbeddingConfig {
+    /// Create an EmbeddingConfig from the global MlConfig.
+    ///
+    /// Maps MlConfig fields to EmbeddingConfig fields, using EmbeddingConfig
+    /// defaults for fields not present in MlConfig (normalize, device_type).
+    pub fn from_ml_config(ml: &crate::config::MlConfig) -> Self {
+        Self {
+            model_name: ml.model_name.clone(),
+            max_length: ml.max_sequence_length,
+            batch_size: ml.batch_size,
+            ..Default::default()
         }
     }
 }
@@ -102,8 +122,16 @@ impl EmbeddingModel {
     /// (~300ms). Subsequent calls reuse the cached model via a process-wide singleton,
     /// only re-loading the lightweight tokenizer from disk.
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
-        // Fast path: reuse the process-wide cached BERT model
+        // Fast path: reuse the process-wide cached BERT model (only if model name matches)
         if let Some(shared) = SHARED_BERT.get() {
+            if shared.model_name != config.model_name {
+                log::info!(
+                    "Cached BERT model '{}' does not match requested '{}', loading fresh",
+                    shared.model_name,
+                    config.model_name
+                );
+                // Fall through to slow path — can't replace OnceLock, but we'll load a local model
+            } else {
             log::info!(
                 "Reusing cached BERT model from {}",
                 shared.model_dir.display()
@@ -130,6 +158,7 @@ impl EmbeddingModel {
                 bert_model: None,
                 shared_bert: Some(Arc::clone(shared)),
             });
+            } // else (model name matches)
         }
 
         // Slow path: first initialization in this process
@@ -172,6 +201,7 @@ impl EmbeddingModel {
                     bert_model: bert,
                     device: embedding_model.device.clone(),
                     model_dir,
+                    model_name: embedding_model.config.model_name.clone(),
                 });
                 // If another thread raced us, ignore the error — we still hold a valid Arc
                 let _ = SHARED_BERT.set(Arc::clone(&shared));

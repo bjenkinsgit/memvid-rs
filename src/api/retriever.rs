@@ -95,6 +95,67 @@ impl MemvidRetriever {
         })
     }
 
+    /// Create a new retriever with an explicit Config for model configuration.
+    ///
+    /// This allows the caller to specify a custom BERT model name via `Config.ml.model_name`,
+    /// which takes precedence over the `MEMVID_MODEL_NAME` env var and the hardcoded default.
+    pub async fn new_with_config<P1: AsRef<Path>, P2: AsRef<Path>>(
+        video_file: P1,
+        database_file: P2,
+        config: Option<Config>,
+    ) -> Result<Self> {
+        let config = config.unwrap_or_default();
+        let video_path = video_file.as_ref().to_string_lossy().to_string();
+        let database_path = database_file.as_ref().to_string_lossy().to_string();
+
+        // Verify files exist
+        if !video_file.as_ref().exists() {
+            return Err(MemvidError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Video file not found: {}", video_path),
+            )));
+        }
+
+        if !database_file.as_ref().exists() {
+            return Err(MemvidError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("Database file not found: {}", database_path),
+            )));
+        }
+
+        // Initialize database connection
+        let database = Database::new(&database_path)?;
+
+        // Initialize video decoder
+        let video_decoder = VideoDecoder::new()?;
+
+        // Initialize QR decoder
+        let qr_decoder = QrDecoder::new();
+
+        // Initialize embedding model using Config.ml settings
+        let embedding_config = EmbeddingConfig::from_ml_config(&config.ml);
+        let embedding_model = EmbeddingModel::new(embedding_config).await?;
+
+        log::info!(
+            "MemvidRetriever initialized for {} with database {} (model: {})",
+            video_path,
+            database_path,
+            config.ml.model_name,
+        );
+
+        Ok(Self {
+            config,
+            video_path,
+            database_path,
+            database,
+            video_decoder,
+            qr_decoder,
+            frame_cache: LruCache::new(std::num::NonZeroUsize::new(1000).unwrap()),
+            embedding_model,
+            index_manager: None,
+        })
+    }
+
     /// Search in the video content using semantic similarity
     pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<(f32, String)>> {
         log::info!("Searching for: '{}' (top {})", query, top_k);
