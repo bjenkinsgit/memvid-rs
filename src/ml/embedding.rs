@@ -13,8 +13,29 @@ use candle_core::{Device, Tensor};
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use chrono;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 
 use serde::{Deserialize, Serialize};
+
+/// Heavy BERT components cached process-wide.
+/// `BertModel::forward()` takes `&self`, so sharing via `Arc` is safe.
+#[allow(dead_code)] // fields read in non-test builds only
+struct SharedBertModel {
+    bert_model: BertModel,
+    device: Device,
+    /// Path to model files on disk (for loading tokenizer on reuse path)
+    model_dir: PathBuf,
+}
+
+// SAFETY: BertModel contains only Tensors (Arc-backed), Device, and tracing::Span —
+// all of which are Send + Sync.
+unsafe impl Send for SharedBertModel {}
+unsafe impl Sync for SharedBertModel {}
+
+/// Process-wide singleton for the loaded BERT model.
+/// Set on first successful init; subsequent `EmbeddingModel::new()` calls reuse it.
+static SHARED_BERT: OnceLock<Arc<SharedBertModel>> = OnceLock::new();
 
 /// Configuration for embedding model
 #[derive(Debug, Clone)]
@@ -60,7 +81,7 @@ pub struct EmbeddingModel {
     config: EmbeddingConfig,
     /// Text processor for tokenization
     text_processor: TextProcessor,
-    /// Embedding cache for performance
+    /// Embedding cache for performance (per-instance, no contention)
     cache: HashMap<String, Embedding>,
     /// Model manager for loading models
     model_manager: ModelManager,
@@ -68,25 +89,58 @@ pub struct EmbeddingModel {
     is_ready: bool,
     /// Candle device for computation
     device: Device,
-    /// BERT model for inference
+    /// BERT model for inference (only set on first process-wide init, then moved to SHARED_BERT)
     bert_model: Option<BertModel>,
+    /// Shared reference to the process-wide BERT model singleton
+    shared_bert: Option<Arc<SharedBertModel>>,
 }
 
 impl EmbeddingModel {
-    /// Create new embedding model with real Candle inference
+    /// Create new embedding model with real Candle inference.
+    ///
+    /// On the first call in a process, downloads (if needed) and loads the full BERT model
+    /// (~300ms). Subsequent calls reuse the cached model via a process-wide singleton,
+    /// only re-loading the lightweight tokenizer from disk.
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
-        log::info!("Initializing real embedding model: {}", config.model_name);
+        // Fast path: reuse the process-wide cached BERT model
+        if let Some(shared) = SHARED_BERT.get() {
+            log::info!(
+                "Reusing cached BERT model from {}",
+                shared.model_dir.display()
+            );
 
+            let text_config = TextConfig {
+                max_length: config.max_length,
+                ..Default::default()
+            };
+            let mut text_processor = TextProcessor::new(text_config);
+            if let Err(e) = text_processor.load_tokenizer(&shared.model_dir) {
+                log::warn!("Failed to load tokenizer from cached path: {}", e);
+            }
+
+            let model_manager = ModelManager::new(None)?;
+
+            return Ok(Self {
+                config,
+                text_processor,
+                cache: HashMap::new(),
+                model_manager,
+                is_ready: true,
+                device: shared.device.clone(),
+                bert_model: None,
+                shared_bert: Some(Arc::clone(shared)),
+            });
+        }
+
+        // Slow path: first initialization in this process
+        log::info!("Initializing embedding model: {}", config.model_name);
         log::info!("Using device: {:?}", config.device_type);
 
-        // Initialize text processor
         let text_config = TextConfig {
             max_length: config.max_length,
             ..Default::default()
         };
         let text_processor = TextProcessor::new(text_config);
-
-        // Initialize model manager
         let model_manager = ModelManager::new(None)?;
 
         let mut embedding_model = Self {
@@ -97,11 +151,32 @@ impl EmbeddingModel {
             is_ready: false,
             device: Device::Cpu,
             bert_model: None,
+            shared_bert: None,
         };
 
         // Try to load the model
         if let Err(e) = embedding_model.load_model().await {
             log::warn!("Failed to load model, will use fallback: {}", e);
+        }
+
+        // Cache the loaded model in the process-wide singleton for future reuse
+        if embedding_model.is_ready {
+            if let Some(bert) = embedding_model.bert_model.take() {
+                let model_dir = embedding_model
+                    .model_manager
+                    .get_model(&embedding_model.config.model_name)
+                    .and_then(|m| m.local_path.clone())
+                    .unwrap_or_default();
+
+                let shared = Arc::new(SharedBertModel {
+                    bert_model: bert,
+                    device: embedding_model.device.clone(),
+                    model_dir,
+                });
+                // If another thread raced us, ignore the error — we still hold a valid Arc
+                let _ = SHARED_BERT.set(Arc::clone(&shared));
+                embedding_model.shared_bert = Some(shared);
+            }
         }
 
         Ok(embedding_model)
@@ -262,10 +337,12 @@ impl EmbeddingModel {
                 tokenized.input_ids.len()
             );
 
-            // Get BERT model reference
+            // Get BERT model reference (prefer shared singleton, fall back to local)
             let bert_model = self
-                .bert_model
+                .shared_bert
                 .as_ref()
+                .map(|s| &s.bert_model)
+                .or(self.bert_model.as_ref())
                 .ok_or_else(|| MemvidError::MachineLearning("BERT model not loaded".to_string()))?;
 
             // Convert to tensors on the correct device
@@ -373,7 +450,9 @@ impl EmbeddingModel {
             return Ok(cached.clone());
         }
 
-        let embedding = if self.is_ready && self.bert_model.is_some() {
+        let embedding = if self.is_ready
+            && (self.bert_model.is_some() || self.shared_bert.is_some())
+        {
             // Use TRUE BERT neural network inference
             log::debug!("🧠 Generating TRUE BERT embedding for: {}", text);
             self.generate_bert_embedding(text)?

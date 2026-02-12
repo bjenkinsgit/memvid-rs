@@ -82,16 +82,38 @@ impl ModelManager {
 
     /// Register default models
     fn register_default_models(&mut self) -> Result<()> {
-        // Register all-MiniLM-L6-v2 model
+        // Pre-check if models already exist on disk to avoid unnecessary hf_hub API calls.
+        // download_model() stores files at cache_dir.join(name), so check both the full
+        // hub_id path (common case) and the short name path.
+        let mini_lm_full_dir = self
+            .cache_dir
+            .join("sentence-transformers/all-MiniLM-L6-v2");
+        let mini_lm_short_dir = self.cache_dir.join("all-MiniLM-L6-v2");
+        let (mini_lm_cached, mini_lm_dir) =
+            if Self::validate_model_files_static(&mini_lm_full_dir).unwrap_or(false) {
+                (true, Some(mini_lm_full_dir))
+            } else if Self::validate_model_files_static(&mini_lm_short_dir).unwrap_or(false) {
+                (true, Some(mini_lm_short_dir))
+            } else {
+                (false, None)
+            };
+
+        if mini_lm_cached {
+            log::debug!(
+                "all-MiniLM-L6-v2 pre-cached at {:?}",
+                mini_lm_dir.as_ref().unwrap()
+            );
+        }
+
         let mini_lm = ModelInfo {
             name: "all-MiniLM-L6-v2".to_string(),
             model_type: ModelType::SentenceTransformer,
-            local_path: None,
+            local_path: mini_lm_dir,
             hub_id: Some("sentence-transformers/all-MiniLM-L6-v2".to_string()),
             config: ModelConfig {
                 dimension: 384,
                 max_length: 384,
-                cached: false,
+                cached: mini_lm_cached,
                 params: HashMap::new(),
             },
         };
@@ -105,15 +127,18 @@ impl ModelManager {
         );
 
         // Register other common models
+        let bert_dir = self.cache_dir.join("bert-base-uncased");
+        let bert_cached = Self::validate_model_files_static(&bert_dir).unwrap_or(false);
+
         let bert_base = ModelInfo {
             name: "bert-base-uncased".to_string(),
             model_type: ModelType::Bert,
-            local_path: None,
+            local_path: if bert_cached { Some(bert_dir) } else { None },
             hub_id: Some("bert-base-uncased".to_string()),
             config: ModelConfig {
                 dimension: 768,
                 max_length: 512,
-                cached: false,
+                cached: bert_cached,
                 params: HashMap::new(),
             },
         };
