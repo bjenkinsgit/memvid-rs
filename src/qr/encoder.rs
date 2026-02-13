@@ -64,9 +64,10 @@ impl QrEncoder {
         })
     }
 
-    /// Encode multiple text chunks into QR frames
+    /// Encode multiple text chunks into QR frames (parallel)
     pub fn encode_chunks(&self, texts: &[String]) -> Result<Vec<QrFrame>> {
-        texts.iter().map(|text| self.encode_text(text)).collect()
+        use rayon::prelude::*;
+        texts.par_iter().map(|text| self.encode_text(text)).collect()
     }
 
     /// Prepare data for encoding (apply compression if beneficial)

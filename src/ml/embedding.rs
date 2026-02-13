@@ -14,12 +14,14 @@ use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use chrono;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
 /// Heavy BERT components cached process-wide.
 /// `BertModel::forward()` takes `&self`, so sharing via `Arc` is safe.
+/// The `forward_lock` mutex serializes GPU forward passes to prevent
+/// Metal command buffer contention when multiple threads use the model.
 #[allow(dead_code)] // fields read in non-test builds only
 struct SharedBertModel {
     bert_model: BertModel,
@@ -28,6 +30,8 @@ struct SharedBertModel {
     model_dir: PathBuf,
     /// Model name used for this loaded model (for cache invalidation)
     model_name: String,
+    /// Mutex to serialize forward passes on GPU (prevents Metal contention)
+    forward_lock: Mutex<()>,
 }
 
 // SAFETY: BertModel contains only Tensors (Arc-backed), Device, and tracing::Span —
@@ -202,6 +206,7 @@ impl EmbeddingModel {
                     device: embedding_model.device.clone(),
                     model_dir,
                     model_name: embedding_model.config.model_name.clone(),
+                    forward_lock: Mutex::new(()),
                 });
                 // If another thread raced us, ignore the error — we still hold a valid Arc
                 let _ = SHARED_BERT.set(Arc::clone(&shared));
@@ -367,10 +372,9 @@ impl EmbeddingModel {
                 tokenized.input_ids.len()
             );
 
-            // Get BERT model reference (prefer shared singleton, fall back to local)
-            let bert_model = self
-                .shared_bert
-                .as_ref()
+            // Get shared BERT reference (prefer shared singleton, fall back to local)
+            let shared_ref = self.shared_bert.as_ref();
+            let bert_model = shared_ref
                 .map(|s| &s.bert_model)
                 .or(self.bert_model.as_ref())
                 .ok_or_else(|| MemvidError::MachineLearning("BERT model not loaded".to_string()))?;
@@ -410,13 +414,15 @@ impl EmbeddingModel {
                 attention_mask.shape()
             );
 
-            // Run BERT forward pass
+            // Run BERT forward pass (serialize GPU access to prevent Metal contention)
             log::debug!("🔥 Running BERT forward pass through transformer layers...");
+            let _gpu_guard = shared_ref.map(|s| s.forward_lock.lock().unwrap());
             let bert_output = bert_model
                 .forward(&input_ids, &token_type_ids, Some(&attention_mask))
                 .map_err(|e| {
                     MemvidError::MachineLearning(format!("BERT forward pass failed: {}", e))
                 })?;
+            drop(_gpu_guard);
 
             log::trace!("BERT output shape: {:?}", bert_output.shape());
 
@@ -437,6 +443,125 @@ impl EmbeddingModel {
 
             Ok(embedding_vec)
         }
+    }
+
+    /// Generate embeddings for a batch of texts using a single BERT forward pass.
+    /// Much faster than calling generate_bert_embedding() in a loop.
+    #[cfg(not(test))]
+    fn generate_bert_embedding_batch(&mut self, texts: &[String]) -> Result<Vec<Embedding>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        log::debug!(
+            "Batch BERT inference for {} texts",
+            texts.len()
+        );
+
+        // Separate cached vs uncached
+        let mut results: Vec<Option<Embedding>> = vec![None; texts.len()];
+        let mut uncached_indices = Vec::new();
+        let mut uncached_texts = Vec::new();
+
+        for (i, text) in texts.iter().enumerate() {
+            if let Some(cached) = self.cache.get(text.as_str()) {
+                results[i] = Some(cached.clone());
+            } else {
+                uncached_indices.push(i);
+                uncached_texts.push(text.clone());
+            }
+        }
+
+        log::debug!(
+            "Batch: {} cached, {} uncached",
+            texts.len() - uncached_texts.len(),
+            uncached_texts.len()
+        );
+
+        if !uncached_texts.is_empty() {
+            // Batch tokenize all uncached texts at once
+            let tokenized_batch = self.text_processor.tokenize_batch(&uncached_texts)?;
+
+            // Get shared BERT reference
+            let shared_ref = self.shared_bert.as_ref();
+            let bert_model = shared_ref
+                .map(|s| &s.bert_model)
+                .or(self.bert_model.as_ref())
+                .ok_or_else(|| {
+                    MemvidError::MachineLearning("BERT model not loaded".to_string())
+                })?;
+
+            // Stack tokenized outputs into [batch_size, seq_len] tensors
+            let batch_size = tokenized_batch.len();
+            let seq_len = tokenized_batch[0].input_ids.len();
+
+            let all_input_ids: Vec<u32> = tokenized_batch
+                .iter()
+                .flat_map(|t| t.input_ids.iter().copied())
+                .collect();
+            let all_token_type_ids: Vec<u32> = tokenized_batch
+                .iter()
+                .flat_map(|t| t.token_type_ids.iter().copied())
+                .collect();
+            let all_attention_mask: Vec<u32> = tokenized_batch
+                .iter()
+                .flat_map(|t| t.attention_mask.iter().copied())
+                .collect();
+
+            let input_ids =
+                Tensor::from_vec(all_input_ids, (batch_size, seq_len), &self.device)?;
+            let token_type_ids =
+                Tensor::from_vec(all_token_type_ids, (batch_size, seq_len), &self.device)?;
+            let attention_mask =
+                Tensor::from_vec(all_attention_mask, (batch_size, seq_len), &self.device)?;
+
+            // Single forward pass for entire batch (serialize GPU access)
+            let _gpu_guard = shared_ref.map(|s| s.forward_lock.lock().unwrap());
+            let bert_output = bert_model
+                .forward(&input_ids, &token_type_ids, Some(&attention_mask))
+                .map_err(|e| {
+                    MemvidError::MachineLearning(format!("BERT batch forward pass failed: {}", e))
+                })?;
+
+            // Mean pooling over sequence dimension
+            let pooled = self.apply_mean_pooling(&bert_output, &attention_mask)?;
+            drop(_gpu_guard);
+            // pooled shape: [batch_size, hidden_size]
+
+            // Extract individual embeddings and cache them
+            for (batch_idx, &orig_idx) in uncached_indices.iter().enumerate() {
+                let embedding_tensor = pooled.get(batch_idx)?;
+                let embedding_vec = embedding_tensor.to_vec1::<f32>().map_err(|e| {
+                    MemvidError::MachineLearning(format!(
+                        "Failed to convert batch embedding tensor: {}",
+                        e
+                    ))
+                })?;
+
+                self.cache
+                    .insert(texts[orig_idx].clone(), embedding_vec.clone());
+                results[orig_idx] = Some(embedding_vec);
+            }
+        }
+
+        // All slots should be filled now
+        Ok(results.into_iter().map(|r| r.unwrap()).collect())
+    }
+
+    /// Test stub for generate_bert_embedding_batch (returns hash-based embeddings)
+    #[cfg(test)]
+    fn generate_bert_embedding_batch(&mut self, texts: &[String]) -> Result<Vec<Embedding>> {
+        let mut results = Vec::with_capacity(texts.len());
+        for text in texts {
+            if let Some(cached) = self.cache.get(text.as_str()) {
+                results.push(cached.clone());
+            } else {
+                let emb = self.generate_test_embedding(text);
+                self.cache.insert(text.clone(), emb.clone());
+                results.push(emb);
+            }
+        }
+        Ok(results)
     }
 
     /// Generate fast test embedding for unit tests (same dimensions as BERT)
@@ -500,18 +625,26 @@ impl EmbeddingModel {
         Ok(embedding)
     }
 
-    /// Generate embeddings for multiple texts
+    /// Generate embeddings for multiple texts using batched BERT inference
     pub fn encode_batch(&mut self, texts: &[String]) -> Result<Vec<Embedding>> {
-        let mut embeddings = Vec::new();
-
-        // Process in batches for efficiency
-        for chunk in texts.chunks(self.config.batch_size) {
-            for text in chunk {
-                embeddings.push(self.encode(text)?);
-            }
+        if !self.is_ready || (!self.bert_model.is_some() && !self.shared_bert.is_some()) {
+            return Err(MemvidError::MachineLearning(
+                "BERT model not loaded - true semantic search requires neural network inference"
+                    .to_string(),
+            ));
         }
 
-        Ok(embeddings)
+        let mut all_embeddings = Vec::with_capacity(texts.len());
+
+        // Process in batches of config.batch_size using batched forward passes
+        for chunk in texts.chunks(self.config.batch_size) {
+            let batch_embeddings = self.generate_bert_embedding_batch(
+                &chunk.iter().map(|s| s.clone()).collect::<Vec<_>>(),
+            )?;
+            all_embeddings.extend(batch_embeddings);
+        }
+
+        Ok(all_embeddings)
     }
 
     /// Generate embeddings for multiple texts with parallel processing and error recovery

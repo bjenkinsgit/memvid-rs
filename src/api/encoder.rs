@@ -190,20 +190,15 @@ impl MemvidEncoder {
 
         log::info!("✅ Generated embeddings for {} chunks", self.chunks.len());
 
-        // Generate QR code frames
+        // Generate QR code frames (parallel via rayon)
         log::info!("Generating QR code frames...");
-        let mut qr_images = Vec::new();
+        let chunk_texts: Vec<String> = self.chunks.iter().map(|c| c.text.clone()).collect();
+        let qr_frames = self.qr_encoder.encode_chunks(&chunk_texts)?;
+        let qr_images: Vec<_> = qr_frames.into_iter().map(|f| f.image).collect();
 
+        // Assign frame numbers to chunks
         for (frame_num, chunk) in self.chunks.iter_mut().enumerate() {
-            let qr_frame = self.qr_encoder.encode_text(&chunk.text)?;
-            qr_images.push(qr_frame.image);
-
-            // Update chunk with frame number
             chunk.frame = Some(frame_num as u32);
-
-            if frame_num % 100 == 0 {
-                log::info!("Generated {} QR frames", frame_num + 1);
-            }
         }
 
         log::info!("Generated {} QR frames, encoding video...", qr_images.len());
@@ -254,7 +249,6 @@ impl MemvidEncoder {
         }
 
         let start_time = std::time::Instant::now();
-        let total_chunks = self.chunks.len();
 
         progress_callback(0.0);
 
@@ -275,19 +269,15 @@ impl MemvidEncoder {
         log::info!("✅ Generated embeddings for {} chunks", self.chunks.len());
         progress_callback(25.0); // Embeddings are ~25% of work
 
-        // Generate QR code frames with progress
+        // Generate QR code frames (parallel via rayon)
         log::info!("Generating QR code frames...");
-        let mut qr_images = Vec::new();
+        let chunk_texts: Vec<String> = self.chunks.iter().map(|c| c.text.clone()).collect();
+        let qr_frames = self.qr_encoder.encode_chunks(&chunk_texts)?;
+        let qr_images: Vec<_> = qr_frames.into_iter().map(|f| f.image).collect();
 
+        // Assign frame numbers to chunks
         for (frame_num, chunk) in self.chunks.iter_mut().enumerate() {
-            let qr_frame = self.qr_encoder.encode_text(&chunk.text)?;
-            qr_images.push(qr_frame.image);
-
             chunk.frame = Some(frame_num as u32);
-
-            // Update progress (QR generation is ~40% of total work, from 25% to 65%)
-            let qr_progress = 25.0 + (frame_num + 1) as f32 / total_chunks as f32 * 40.0;
-            progress_callback(qr_progress);
         }
 
         progress_callback(65.0);
@@ -545,13 +535,10 @@ impl MemvidEncoder {
             });
         }
 
-        // 5. Generate QR frames for new chunks
+        // 5. Generate QR frames for new chunks (parallel via rayon)
         log::info!("Generating QR frames for new chunks...");
-        let mut new_qr_images = Vec::new();
-        for chunk_text in &new_chunks {
-            let qr_frame = self.qr_encoder.encode_text(chunk_text)?;
-            new_qr_images.push(qr_frame.image);
-        }
+        let qr_frames = self.qr_encoder.encode_chunks(&new_chunks)?;
+        let new_qr_images: Vec<_> = qr_frames.into_iter().map(|f| f.image).collect();
 
         // 6. Create temporary video with new frames
         let temp_new_video = format!("{}.new_frames.mp4", existing_video_file);

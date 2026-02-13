@@ -118,7 +118,9 @@ impl VideoEncoder {
         Ok(())
     }
 
-    /// Encode individual image frames with upscaling for QR preservation
+    /// Encode individual image frames with upscaling for QR preservation.
+    /// Image upscale + RGB conversion runs in parallel batches via rayon;
+    /// FFmpeg encoding (send_frame) stays serial on the main thread.
     async fn encode_image_frames(
         &self,
         frames: &[DynamicImage],
@@ -126,7 +128,9 @@ impl VideoEncoder {
         output_ctx: &mut ffmpeg_next::format::context::Output,
         stream_index: usize,
     ) -> Result<()> {
-        // Use config dimensions for all frames
+        use image::RgbImage;
+        use rayon::prelude::*;
+
         let target_width = self.config.frame_width;
         let target_height = self.config.frame_height;
 
@@ -136,65 +140,74 @@ impl VideoEncoder {
             target_height
         );
 
-        for (i, image) in frames.iter().enumerate() {
-            // Always upscale QR codes to target resolution for better compression resistance
-            let upscaled_image = image.resize_exact(
-                target_width,
-                target_height,
-                image::imageops::FilterType::Nearest, // Use nearest neighbor for crisp QR codes
-            );
+        // Create scaler once (reused across frames — much cheaper than per-frame)
+        let mut scaler = ffmpeg_next::software::scaling::Context::get(
+            ffmpeg_next::format::Pixel::RGB24,
+            target_width,
+            target_height,
+            ffmpeg_next::format::Pixel::YUV420P,
+            target_width,
+            target_height,
+            ffmpeg_next::software::scaling::Flags::BILINEAR,
+        )
+        .map_err(|e| MemvidError::Video(format!("Failed to create scaler: {}", e)))?;
 
-            // Convert image to RGB format
-            let rgb_image = upscaled_image.to_rgb8();
-            let rgb_data = rgb_image.as_raw();
+        const BATCH_SIZE: usize = 64;
 
-            // Create video frame
-            let mut frame = ffmpeg_next::frame::Video::new(
-                ffmpeg_next::format::Pixel::RGB24,
-                target_width,
-                target_height,
-            );
+        for (batch_start, batch) in frames.chunks(BATCH_SIZE).enumerate().map(|(i, c)| (i * BATCH_SIZE, c)) {
+            // Parallel: upscale + RGB conversion (pure image crate, no FFmpeg types)
+            let prepared_rgb: Vec<RgbImage> = batch
+                .par_iter()
+                .map(|img| {
+                    img.resize_exact(
+                        target_width,
+                        target_height,
+                        image::imageops::FilterType::Nearest,
+                    )
+                    .to_rgb8()
+                })
+                .collect();
 
-            // Copy RGB data to frame
-            frame.data_mut(0)[..rgb_data.len()].copy_from_slice(rgb_data);
-            frame.set_pts(Some((i as f64 / self.config.fps * 1000.0) as i64));
+            // Serial: FFmpeg encoding (not Send/Sync safe)
+            for (local_idx, rgb_image) in prepared_rgb.iter().enumerate() {
+                let global_idx = batch_start + local_idx;
+                let rgb_data = rgb_image.as_raw();
 
-            // Convert RGB to YUV420P for encoding
-            let mut yuv_frame = ffmpeg_next::frame::Video::new(
-                ffmpeg_next::format::Pixel::YUV420P,
-                target_width,
-                target_height,
-            );
+                // Create RGB video frame
+                let mut frame = ffmpeg_next::frame::Video::new(
+                    ffmpeg_next::format::Pixel::RGB24,
+                    target_width,
+                    target_height,
+                );
+                frame.data_mut(0)[..rgb_data.len()].copy_from_slice(rgb_data);
+                frame.set_pts(Some((global_idx as f64 / self.config.fps * 1000.0) as i64));
 
-            // Set up software scaler for RGB to YUV conversion
-            let mut scaler = ffmpeg_next::software::scaling::Context::get(
-                ffmpeg_next::format::Pixel::RGB24,
-                target_width,
-                target_height,
-                ffmpeg_next::format::Pixel::YUV420P,
-                target_width,
-                target_height,
-                ffmpeg_next::software::scaling::Flags::BILINEAR,
-            )
-            .map_err(|e| MemvidError::Video(format!("Failed to create scaler: {}", e)))?;
+                // Convert RGB to YUV420P
+                let mut yuv_frame = ffmpeg_next::frame::Video::new(
+                    ffmpeg_next::format::Pixel::YUV420P,
+                    target_width,
+                    target_height,
+                );
 
-            scaler
-                .run(&frame, &mut yuv_frame)
-                .map_err(|e| MemvidError::Video(format!("Failed to scale frame: {}", e)))?;
+                scaler
+                    .run(&frame, &mut yuv_frame)
+                    .map_err(|e| MemvidError::Video(format!("Failed to scale frame: {}", e)))?;
 
-            yuv_frame.set_pts(frame.pts());
+                yuv_frame.set_pts(frame.pts());
 
-            // Send frame to encoder
-            encoder
-                .send_frame(&yuv_frame)
-                .map_err(|e| MemvidError::Video(format!("Failed to send frame: {}", e)))?;
+                // Send frame to encoder
+                encoder
+                    .send_frame(&yuv_frame)
+                    .map_err(|e| MemvidError::Video(format!("Failed to send frame: {}", e)))?;
 
-            // Receive and write packets
-            self.receive_and_write_packets(encoder, output_ctx, stream_index)
-                .await?;
+                // Receive and write packets
+                self.receive_and_write_packets(encoder, output_ctx, stream_index)
+                    .await?;
+            }
 
-            if (i + 1) % 10 == 0 {
-                log::info!("Encoded {}/{} frames", i + 1, frames.len());
+            let encoded_so_far = batch_start + batch.len();
+            if encoded_so_far % 10 == 0 || encoded_so_far == frames.len() {
+                log::info!("Encoded {}/{} frames", encoded_so_far, frames.len());
             }
         }
 
