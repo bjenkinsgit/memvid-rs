@@ -340,7 +340,7 @@ impl Default for SearchConfig {
         Self {
             engine: "auto".to_string(),
             hnsw: HnswConfig::default(),
-            max_results: 100,
+            max_results: 5,
             min_score_threshold: 0.0,
             enable_reranking: false,
             cache_size: 1000,

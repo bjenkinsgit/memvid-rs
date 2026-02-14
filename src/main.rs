@@ -13,24 +13,26 @@ use std::path::{Path, PathBuf};
 )]
 #[command(version)]
 struct Cli {
-    /// Path to TOML config file (e.g. memvid_config.toml)
+    /// TOML config file with embedding, chunking, QR, and search settings.
+    /// Required for indexes built with remote embeddings. Without this flag,
+    /// defaults to local BERT (all-MiniLM-L6-v2, 384-dim).
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
-    /// Remote embedding API URL (overrides config file and EMBEDDING_API_URL env var)
-    #[arg(long, global = true)]
+    /// Override: remote embedding API URL (takes priority over config file and EMBEDDING_API_URL env var)
+    #[arg(long, global = true, hide_short_help = true)]
     embedding_api_url: Option<String>,
 
-    /// Remote embedding model name (overrides config file and EMBEDDING_API_MODEL env var)
-    #[arg(long, global = true)]
+    /// Override: remote embedding model name (takes priority over config file and EMBEDDING_API_MODEL env var)
+    #[arg(long, global = true, hide_short_help = true)]
     embedding_api_model: Option<String>,
 
-    /// Query prefix for asymmetric/instruction-tuned embedding models
-    #[arg(long, global = true)]
+    /// Override: query prefix for asymmetric/instruction-tuned models (takes priority over config file)
+    #[arg(long, global = true, hide_short_help = true)]
     query_prefix: Option<String>,
 
-    /// Document prefix for asymmetric/instruction-tuned embedding models
-    #[arg(long, global = true)]
+    /// Override: document prefix for asymmetric/instruction-tuned models (takes priority over config file)
+    #[arg(long, global = true, hide_short_help = true)]
     document_prefix: Option<String>,
 
     #[command(subcommand)]
@@ -66,9 +68,9 @@ enum Commands {
         /// Knowledge base file (e.g. "notes", "notes.mp4", or "/path/to/notes")
         file: PathBuf,
 
-        /// Number of results to return
-        #[arg(short = 'k', long, default_value = "5")]
-        top_k: usize,
+        /// Number of results (default: 5, or search.max_results from config)
+        #[arg(short = 'k', long)]
+        top_k: Option<usize>,
     },
 
     /// Interactive chat with your documents
@@ -180,7 +182,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             top_k,
         } => {
             let (video, index) = resolve_paths(&file);
-            search_command(video, index, query, top_k, config).await?;
+            let k = top_k.unwrap_or(config.search.max_results);
+            search_command(video, index, query, k, config).await?;
         }
         Commands::Chat { file } => {
             let (video, index) = resolve_paths(&file);
