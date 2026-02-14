@@ -200,4 +200,29 @@ mod tests {
     fn test_nonexistent_file() {
         assert!(!PdfProcessor::is_pdf("/nonexistent/file.pdf"));
     }
+
+    #[test]
+    fn test_catch_unwind_mechanism() {
+        // Verify that std::panic::catch_unwind works as expected
+        // This is the mechanism we use to catch panics from pdf-extract/cff-parser
+
+        let result = std::panic::catch_unwind(|| {
+            panic!("simulated cff-parser panic");
+        });
+
+        assert!(result.is_err(), "catch_unwind should catch the panic");
+    }
+
+    #[test]
+    fn test_extract_text_handles_invalid_pdf() {
+        // Create a file with PDF header but invalid content
+        // This tests the fallback path (though it won't trigger the exact cff-parser panic)
+        let mut temp_file = NamedTempFile::new().unwrap();
+        writeln!(temp_file, "%PDF-1.4").unwrap();
+        writeln!(temp_file, "invalid pdf content").unwrap();
+
+        // Should return an error, not panic
+        let result = PdfProcessor::extract_text(temp_file.path());
+        assert!(result.is_err());
+    }
 }
