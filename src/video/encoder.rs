@@ -57,9 +57,17 @@ impl VideoEncoder {
         let mut output_ctx = ffmpeg_next::format::output(&output_path)
             .map_err(|e| MemvidError::Video(format!("Failed to create output context: {}", e)))?;
 
-        // Find H.265 encoder (HEVC)
-        let codec = ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::HEVC)
-            .ok_or_else(|| MemvidError::Video("H.265 (HEVC) encoder not found".to_string()))?;
+        // Find H.265 encoder (HEVC), trying hardware encoder first on macOS
+        let codec = if self.config.hardware_acceleration {
+            ffmpeg_next::encoder::find_by_name("hevc_videotoolbox")
+                .or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::HEVC))
+        } else {
+            ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::HEVC)
+        }
+        .ok_or_else(|| MemvidError::Video("H.265 (HEVC) encoder not found".to_string()))?;
+
+        let using_videotoolbox = codec.name() == "hevc_videotoolbox";
+        log::info!("Using {} encoder for video", codec.name());
 
         // Create video stream
         let mut stream = output_ctx
@@ -74,18 +82,33 @@ impl VideoEncoder {
             .map_err(|e| MemvidError::Video(format!("Failed to create video encoder: {}", e)))?;
 
         // Set encoder parameters - use config dimensions, not QR size
+        // VideoToolbox prefers NV12 (bi-planar 4:2:0) as its hardware fast path
+        let pixel_format = if using_videotoolbox {
+            ffmpeg_next::format::Pixel::NV12
+        } else {
+            ffmpeg_next::format::Pixel::YUV420P
+        };
+
         encoder.set_width(self.config.frame_width);
         encoder.set_height(self.config.frame_height);
-        encoder.set_format(ffmpeg_next::format::Pixel::YUV420P);
+        encoder.set_format(pixel_format);
         encoder.set_time_base(ffmpeg_next::Rational::new(1, self.config.fps as i32));
         encoder.set_frame_rate(Some(ffmpeg_next::Rational::new(self.config.fps as i32, 1)));
 
-        // Set codec parameters optimized for QR codes (matching Python H.265 implementation exactly)
+        // Set codec parameters based on encoder type
         let mut dictionary = ffmpeg_next::Dictionary::new();
 
-        // Use parameters from config.quality_params (matches Python H265_PARAMETERS)
-        for (key, value) in &self.config.quality_params {
-            dictionary.set(key, value);
+        if using_videotoolbox {
+            // VideoToolbox hardware encoder — use bitrate control, not x265 CRF/preset
+            encoder.set_bit_rate(4_000_000); // 4 Mbps — generous for 256x256 QR frames
+            dictionary.set("allow_sw", "0"); // hardware only
+            dictionary.set("realtime", "0"); // quality over speed
+            dictionary.set("profile", "main");
+        } else {
+            // Software x265 params from config (matches Python H265_PARAMETERS)
+            for (key, value) in &self.config.quality_params {
+                dictionary.set(key, value);
+            }
         }
 
         // Open encoder
@@ -102,7 +125,7 @@ impl VideoEncoder {
             .map_err(|e| MemvidError::Video(format!("Failed to write header: {}", e)))?;
 
         // Encode frames with upscaling
-        self.encode_image_frames(frames, &mut encoder, &mut output_ctx, stream_index)
+        self.encode_image_frames(frames, &mut encoder, &mut output_ctx, stream_index, pixel_format)
             .await?;
 
         // Write trailer
@@ -127,6 +150,7 @@ impl VideoEncoder {
         encoder: &mut ffmpeg_next::encoder::Video,
         output_ctx: &mut ffmpeg_next::format::context::Output,
         stream_index: usize,
+        pixel_format: ffmpeg_next::format::Pixel,
     ) -> Result<()> {
         use image::RgbImage;
         use rayon::prelude::*;
@@ -141,11 +165,12 @@ impl VideoEncoder {
         );
 
         // Create scaler once (reused across frames — much cheaper than per-frame)
+        // Output format matches encoder: NV12 for VideoToolbox, YUV420P for software
         let mut scaler = ffmpeg_next::software::scaling::Context::get(
             ffmpeg_next::format::Pixel::RGB24,
             target_width,
             target_height,
-            ffmpeg_next::format::Pixel::YUV420P,
+            pixel_format,
             target_width,
             target_height,
             ffmpeg_next::software::scaling::Flags::BILINEAR,
@@ -182,9 +207,9 @@ impl VideoEncoder {
                 frame.data_mut(0)[..rgb_data.len()].copy_from_slice(rgb_data);
                 frame.set_pts(Some((global_idx as f64 / self.config.fps * 1000.0) as i64));
 
-                // Convert RGB to YUV420P
+                // Convert RGB to encoder pixel format (NV12 for VideoToolbox, YUV420P for software)
                 let mut yuv_frame = ffmpeg_next::frame::Video::new(
-                    ffmpeg_next::format::Pixel::YUV420P,
+                    pixel_format,
                     target_width,
                     target_height,
                 );
