@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 /// Main configuration structure for memvid operations
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct Config {
     /// Text chunking configuration
     pub chunking: ChunkingConfig,
@@ -30,6 +31,7 @@ pub struct Config {
 
 /// Text chunking configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ChunkingConfig {
     /// Default chunk size in characters
     pub chunk_size: usize,
@@ -46,6 +48,7 @@ pub struct ChunkingConfig {
 
 /// QR code generation configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct QrConfig {
     /// QR code version (1-40, None for auto)
     pub version: Option<i16>,
@@ -74,6 +77,7 @@ pub struct QrConfig {
 
 /// QR error correction levels
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ErrorCorrectionLevel {
     Low,      // ~7%
     Medium,   // ~15%
@@ -83,6 +87,7 @@ pub enum ErrorCorrectionLevel {
 
 /// Video encoding configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VideoConfig {
     /// Video codec
     pub codec: String,
@@ -129,6 +134,7 @@ fn default_ffmpeg_hide_banner() -> bool {
 
 /// Machine learning configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct MlConfig {
     /// Embedding model name or path
     pub model_name: String,
@@ -169,6 +175,7 @@ pub struct MlConfig {
 
 /// Search configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SearchConfig {
     /// Vector search engine (hnsw, flat, auto)
     pub engine: String,
@@ -194,6 +201,7 @@ pub struct SearchConfig {
 
 /// HNSW (Hierarchical Navigable Small World) configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HnswConfig {
     /// Maximum number of connections for each node
     pub max_connections: usize,
@@ -210,6 +218,7 @@ pub struct HnswConfig {
 
 /// Storage configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StorageConfig {
     /// Database file path
     pub database_path: Option<String>,
