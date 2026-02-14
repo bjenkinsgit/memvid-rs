@@ -307,6 +307,7 @@ async fn chat_command(
     println!("   Type 'quit' or 'exit' to end the session");
     println!();
 
+    let top_k = config.search.max_results;
     let mut retriever = MemvidRetriever::new_with_config(&video, &index, Some(config)).await?;
 
     loop {
@@ -327,7 +328,7 @@ async fn chat_command(
             break;
         }
 
-        let results = retriever.search(input, 3).await?;
+        let results = retriever.search(input, top_k).await?;
 
         if results.is_empty() {
             println!("❌ No results found for: \"{}\"", input);

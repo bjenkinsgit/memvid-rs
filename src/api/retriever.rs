@@ -69,6 +69,9 @@ impl MemvidRetriever {
         // Initialize video decoder
         let video_decoder = VideoDecoder::new()?;
 
+        // Suppress swscaler/libav* warnings (default: error level)
+        Config::default().video.apply_library_log_level();
+
         // Initialize QR decoder
         let qr_decoder = QrDecoder::new();
 
@@ -128,6 +131,9 @@ impl MemvidRetriever {
 
         // Initialize video decoder
         let video_decoder = VideoDecoder::new()?;
+
+        // Suppress swscaler/libav* warnings per config
+        config.video.apply_library_log_level();
 
         // Initialize QR decoder
         let qr_decoder = QrDecoder::new();

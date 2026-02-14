@@ -115,6 +115,11 @@ pub struct VideoConfig {
     #[serde(default = "default_ffmpeg_cli_log_level")]
     pub ffmpeg_cli_log_level: String,
 
+    /// FFmpeg library (ffmpeg-next) log level: quiet, panic, fatal, error, warning, info, verbose, debug, trace
+    /// Controls swscaler/libav* warnings from the in-process decoder. Defaults to "error".
+    #[serde(default = "default_ffmpeg_library_log_level")]
+    pub library_log_level: String,
+
     /// Hide FFmpeg CLI banner
     #[serde(default = "default_ffmpeg_hide_banner")]
     pub ffmpeg_hide_banner: bool,
@@ -125,6 +130,10 @@ fn default_x265_log_level() -> String {
 }
 
 fn default_ffmpeg_cli_log_level() -> String {
+    "error".to_string()
+}
+
+fn default_ffmpeg_library_log_level() -> String {
     "error".to_string()
 }
 
@@ -302,6 +311,7 @@ impl Default for VideoConfig {
             hardware_acceleration: true,
             x265_log_level,
             ffmpeg_cli_log_level: default_ffmpeg_cli_log_level(),
+            library_log_level: default_ffmpeg_library_log_level(),
             ffmpeg_hide_banner: default_ffmpeg_hide_banner(),
         }
     }
@@ -314,6 +324,25 @@ impl VideoConfig {
             "x265-params".to_string(),
             format!("log-level={}", self.x265_log_level)
         );
+    }
+
+    /// Apply the library_log_level setting to ffmpeg-next's global log level.
+    /// Call this after `ffmpeg_next::init()` to suppress swscaler/libav* warnings.
+    pub fn apply_library_log_level(&self) {
+        use ffmpeg_next::util::log::Level;
+        let level = match self.library_log_level.to_lowercase().as_str() {
+            "quiet" => Level::Quiet,
+            "panic" => Level::Panic,
+            "fatal" => Level::Fatal,
+            "error" => Level::Error,
+            "warning" => Level::Warning,
+            "info" => Level::Info,
+            "verbose" => Level::Verbose,
+            "debug" => Level::Debug,
+            "trace" => Level::Trace,
+            _ => Level::Error,
+        };
+        ffmpeg_next::util::log::set_level(level);
     }
 }
 
