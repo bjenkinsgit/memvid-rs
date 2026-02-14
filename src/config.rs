@@ -251,9 +251,9 @@ pub struct StorageConfig {
 impl Config {
     /// Load configuration from a TOML file.
     ///
-    /// Unknown sections (e.g. `[metadata]`, `[cache]`, `[memory]`, `[ffmpeg]`)
-    /// are silently ignored, so this can load config files that contain
-    /// application-specific sections alongside the memvid sections.
+    /// Unknown sections (e.g. `[metadata]`, `[cache]`, `[memory]`) are silently
+    /// ignored, so this can load config files that contain application-specific
+    /// sections alongside the memvid sections.
     pub fn from_toml_file(path: &std::path::Path) -> Result<Config, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
         let config: Config = toml::from_str(&content)?;
