@@ -155,6 +155,16 @@ pub struct MlConfig {
     /// Model name for remote embedding API
     #[serde(default)]
     pub embedding_api_model: Option<String>,
+
+    /// Prefix prepended to search queries for asymmetric/instruction-tuned models.
+    /// Empty by default (no prefix for symmetric models like MiniLM, BGE-small).
+    #[serde(default)]
+    pub embedding_query_prefix: Option<String>,
+
+    /// Prefix prepended to document chunks during indexing.
+    /// Empty by default (most models don't need a document prefix).
+    #[serde(default)]
+    pub embedding_document_prefix: Option<String>,
 }
 
 /// Search configuration
@@ -297,6 +307,8 @@ impl Default for MlConfig {
             quantization: false,
             embedding_api_url: None,
             embedding_api_model: None,
+            embedding_query_prefix: None,
+            embedding_document_prefix: None,
         }
     }
 }

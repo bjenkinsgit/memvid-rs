@@ -160,8 +160,8 @@ impl MemvidRetriever {
     pub async fn search(&mut self, query: &str, top_k: usize) -> Result<Vec<(f32, String)>> {
         log::info!("Searching for: '{}' (top {})", query, top_k);
 
-        // Generate embedding for the query
-        let query_embedding = self.embedding_model.encode(query)?;
+        // Generate embedding for the query (uses query prefix for asymmetric models)
+        let query_embedding = self.embedding_model.encode_query(query)?;
 
         // If we have an index manager, use semantic search
         if let Some(ref index_manager) = self.index_manager {
@@ -282,8 +282,8 @@ impl MemvidRetriever {
     ) -> Result<Vec<SearchResult>> {
         log::info!("Searching with metadata for: '{}' (top {})", query, top_k);
 
-        // Generate embedding for the query
-        let query_embedding = self.embedding_model.encode(query)?;
+        // Generate embedding for the query (uses query prefix for asymmetric models)
+        let query_embedding = self.embedding_model.encode_query(query)?;
 
         // If we have an index manager, use semantic search
         if let Some(ref index_manager) = self.index_manager {

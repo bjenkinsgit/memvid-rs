@@ -4,3 +4,12 @@ output
 ref/memvid-main
 .DS_Store
 justfile
+*.mp4
+*.index
+*.prd
+*.db
+*.md
+*.pdf
+*.db-shm
+*.db-wal
+/.claude

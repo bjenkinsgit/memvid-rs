@@ -60,6 +60,10 @@ pub struct EmbeddingConfig {
     pub embedding_api_url: Option<String>,
     /// Model name for remote embedding API
     pub embedding_api_model: Option<String>,
+    /// Prefix prepended to search queries (for asymmetric/instruction-tuned models)
+    pub query_prefix: String,
+    /// Prefix prepended to document chunks during indexing
+    pub document_prefix: String,
 }
 
 impl Default for EmbeddingConfig {
@@ -83,6 +87,8 @@ impl Default for EmbeddingConfig {
             device_type,
             embedding_api_url: None,
             embedding_api_model: None,
+            query_prefix: String::new(),
+            document_prefix: String::new(),
         }
     }
 }
@@ -99,6 +105,8 @@ impl EmbeddingConfig {
             batch_size: ml.batch_size,
             embedding_api_url: ml.embedding_api_url.clone(),
             embedding_api_model: ml.embedding_api_model.clone(),
+            query_prefix: ml.embedding_query_prefix.clone().unwrap_or_default(),
+            document_prefix: ml.embedding_document_prefix.clone().unwrap_or_default(),
             ..Default::default()
         }
     }
@@ -133,6 +141,10 @@ pub struct EmbeddingModel {
     api_url: Option<String>,
     /// Model name for remote API requests
     api_model: Option<String>,
+    /// Prefix prepended to search queries (for asymmetric/instruction-tuned models)
+    query_prefix: String,
+    /// Prefix prepended to document chunks during indexing
+    document_prefix: String,
 }
 
 impl EmbeddingModel {
@@ -162,11 +174,26 @@ impl EmbeddingModel {
             let text_processor = TextProcessor::new(text_config);
             let model_manager = ModelManager::new(None)?;
 
+            // Warn if model name suggests instruction-tuned but no query prefix is set
+            if config.query_prefix.is_empty() {
+                let model_to_check = config.embedding_api_model.as_deref()
+                    .unwrap_or(&config.model_name);
+                if model_to_check.to_lowercase().contains("instruct") {
+                    log::warn!(
+                        "Model '{}' appears to be instruction-tuned but no embedding_query_prefix is configured. \
+                         Retrieval quality may be degraded. Consider setting embedding_query_prefix in memvid_config.toml.",
+                        model_to_check
+                    );
+                }
+            }
+
             return Ok(Self {
                 api_url: Some(api_url.clone()),
                 api_model: config.embedding_api_model.clone(),
                 api_client: Some(client),
                 remote_dimension: 0, // discovered from first API response
+                query_prefix: config.query_prefix.clone(),
+                document_prefix: config.document_prefix.clone(),
                 config,
                 text_processor,
                 cache: HashMap::new(),
@@ -205,6 +232,8 @@ impl EmbeddingModel {
             let model_manager = ModelManager::new(None)?;
 
             return Ok(Self {
+                query_prefix: config.query_prefix.clone(),
+                document_prefix: config.document_prefix.clone(),
                 config,
                 text_processor,
                 cache: HashMap::new(),
@@ -232,7 +261,20 @@ impl EmbeddingModel {
         let text_processor = TextProcessor::new(text_config);
         let model_manager = ModelManager::new(None)?;
 
+        // Warn if model name suggests instruction-tuned but no query prefix is set
+        if config.query_prefix.is_empty()
+            && config.model_name.to_lowercase().contains("instruct")
+        {
+            log::warn!(
+                "Model '{}' appears to be instruction-tuned but no embedding_query_prefix is configured. \
+                 Retrieval quality may be degraded. Consider setting embedding_query_prefix in memvid_config.toml.",
+                config.model_name
+            );
+        }
+
         let mut embedding_model = Self {
+            query_prefix: config.query_prefix.clone(),
+            document_prefix: config.document_prefix.clone(),
             config,
             text_processor,
             cache: HashMap::new(),
@@ -744,8 +786,32 @@ impl EmbeddingModel {
         Ok(response.data.into_iter().map(|d| d.embedding).collect())
     }
 
-    /// Generate embedding for a single text using BERT inference or remote API
+    /// Generate embedding for a query string, prepending the query prefix.
+    ///
+    /// Use this for search queries. For document/chunk indexing, use `encode()` instead.
+    pub fn encode_query(&mut self, text: &str) -> Result<Embedding> {
+        if self.query_prefix.is_empty() {
+            self.encode(text)
+        } else {
+            let prefixed = format!("{}{}", self.query_prefix, text);
+            self.encode(&prefixed)
+        }
+    }
+
+    /// Generate embedding for a single text using BERT inference or remote API.
+    ///
+    /// Prepends the document prefix (if configured) for indexing use cases.
+    /// For search queries, use `encode_query()` instead.
     pub fn encode(&mut self, text: &str) -> Result<Embedding> {
+        // Apply document prefix if configured
+        let prefixed;
+        let text = if !self.document_prefix.is_empty() {
+            prefixed = format!("{}{}", self.document_prefix, text);
+            prefixed.as_str()
+        } else {
+            text
+        };
+
         // Check cache first
         if let Some(cached) = self.cache.get(text) {
             log::trace!("Using cached embedding");
@@ -781,8 +847,22 @@ impl EmbeddingModel {
         Ok(embedding)
     }
 
-    /// Generate embeddings for multiple texts using batched BERT inference or remote API
+    /// Generate embeddings for multiple texts using batched BERT inference or remote API.
+    ///
+    /// Prepends the document prefix (if configured) to each text for indexing use cases.
     pub fn encode_batch(&mut self, texts: &[String]) -> Result<Vec<Embedding>> {
+        // Apply document prefix if configured
+        let prefixed_texts;
+        let texts = if !self.document_prefix.is_empty() {
+            prefixed_texts = texts
+                .iter()
+                .map(|t| format!("{}{}", self.document_prefix, t))
+                .collect::<Vec<_>>();
+            prefixed_texts.as_slice()
+        } else {
+            texts
+        };
+
         if self.api_client.is_some() {
             // Remote API path: batch into config.batch_size-sized API calls
             let mut all_embeddings = Vec::with_capacity(texts.len());
