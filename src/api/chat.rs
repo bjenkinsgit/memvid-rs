@@ -3,6 +3,7 @@
 //! This module provides convenient functions for quick queries and interactive chat sessions.
 
 use crate::api::MemvidRetriever;
+use crate::config::Config;
 use crate::error::{MemvidError, Result};
 use async_openai::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
@@ -45,7 +46,7 @@ pub async fn quick_chat(
     query: &str,
     api_key: &str,
 ) -> Result<String> {
-    quick_chat_with_config(video_file, index_file, query, api_key, None, None).await
+    quick_chat_with_config(video_file, index_file, query, api_key, None, None, None).await
 }
 
 /// Quick chat with configurable OpenAI-compatible API settings
@@ -57,6 +58,7 @@ pub async fn quick_chat(
 /// * `api_key` - Optional OpenAI API key for LLM responses
 /// * `base_url` - Optional base URL for OpenAI-compatible APIs (e.g., "http://localhost:11434/v1" for Ollama)
 /// * `model` - Optional model name (defaults to "gpt-3.5-turbo")
+/// * `config` - Optional memvid Config (for remote embedding API, chunking settings, etc.)
 ///
 /// # Examples
 /// ```no_run
@@ -71,7 +73,8 @@ pub async fn quick_chat(
 ///         "What is quantum computing?",
 ///         "",  // No API key needed for local Ollama
 ///         Some("http://localhost:11434/v1"),
-///         Some("llama2")
+///         Some("llama2"),
+///         None,  // Use default config
 ///     ).await?;
 ///     println!("Response: {}", response);
 ///     Ok(())
@@ -84,8 +87,9 @@ pub async fn quick_chat_with_config(
     api_key: &str,
     base_url: Option<&str>,
     model: Option<&str>,
+    config: Option<Config>,
 ) -> Result<String> {
-    let mut retriever = MemvidRetriever::new(video_file, index_file).await?;
+    let mut retriever = MemvidRetriever::new_with_config(video_file, index_file, config).await?;
 
     // Get relevant chunks (matching Python's default of 5 chunks)
     let results = retriever.search(query, 5).await?;
@@ -243,7 +247,7 @@ async fn generate_openai_response(
 /// }
 /// ```
 pub async fn chat_with_memory(video_file: &str, index_file: &str, api_key: &str) -> Result<()> {
-    chat_with_memory_config(video_file, index_file, api_key, None, None).await
+    chat_with_memory_config(video_file, index_file, api_key, None, None, None).await
 }
 
 /// Interactive chat session with configurable OpenAI-compatible API settings
@@ -254,6 +258,7 @@ pub async fn chat_with_memory(video_file: &str, index_file: &str, api_key: &str)
 /// * `api_key` - Optional OpenAI API key for LLM responses
 /// * `base_url` - Optional base URL for OpenAI-compatible APIs
 /// * `model` - Optional model name
+/// * `config` - Optional memvid Config (for remote embedding API, chunking settings, etc.)
 ///
 /// # Examples
 /// ```no_run
@@ -267,7 +272,8 @@ pub async fn chat_with_memory(video_file: &str, index_file: &str, api_key: &str)
 ///         "memory_index.db",
 ///         "",  // No API key needed for local Ollama
 ///         Some("http://localhost:11434/v1"),
-///         Some("llama2")
+///         Some("llama2"),
+///         None,  // Use default config
 ///     ).await?;
 ///     Ok(())
 /// }
@@ -278,8 +284,9 @@ pub async fn chat_with_memory_config(
     api_key: &str,
     base_url: Option<&str>,
     model: Option<&str>,
+    config: Option<Config>,
 ) -> Result<()> {
-    let mut retriever = MemvidRetriever::new(video_file, index_file).await?;
+    let mut retriever = MemvidRetriever::new_with_config(video_file, index_file, config).await?;
 
     // Display startup message (matching Python)
     println!("💬 Interactive Chat Mode");
@@ -376,11 +383,41 @@ pub async fn chat_with_memory_config(
                     continue;
                 }
 
-                // Regular chat - process the query
+                // Regular chat - reuse the existing retriever
                 let start_time = std::time::Instant::now();
-                let response =
-                    quick_chat_with_config(video_file, index_file, input, api_key, base_url, model)
-                        .await?;
+                let results = retriever.search(input, 5).await?;
+                let response = if results.is_empty() {
+                    "I couldn't find any relevant information in the knowledge base.".to_string()
+                } else {
+                    let avg_chunk_length: f32 = results
+                        .iter()
+                        .map(|(_, text)| text.len() as f32)
+                        .sum::<f32>()
+                        / results.len() as f32;
+
+                    if avg_chunk_length < 50.0 {
+                        "I couldn't find any relevant information about that topic in the knowledge base.".to_string()
+                    } else {
+                        let context = results
+                            .iter()
+                            .take(3)
+                            .map(|(_score, text)| format!("[Context]: {}", text))
+                            .collect::<Vec<_>>()
+                            .join("\n\n");
+
+                        if api_key.is_empty() && base_url.is_none() {
+                            generate_context_only_response(&results)
+                        } else {
+                            match generate_openai_response(input, &context, api_key, base_url, model).await {
+                                Ok(response) => response,
+                                Err(e) => {
+                                    log::warn!("LLM API error: {}. Falling back to context-only response.", e);
+                                    generate_context_only_response(&results)
+                                }
+                            }
+                        }
+                    }
+                };
                 let elapsed = start_time.elapsed();
 
                 println!("\nAssistant: {}", response);

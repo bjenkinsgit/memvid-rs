@@ -64,6 +64,7 @@ async fn main() -> Result<()> {
         api_key,
         Some(&base_url),
         Some(&model),
+        None,
     )
     .await
     {
@@ -95,6 +96,7 @@ async fn main() -> Result<()> {
         api_key,
         Some(&base_url),
         Some(&model),
+        None,
     )
     .await?;
 
