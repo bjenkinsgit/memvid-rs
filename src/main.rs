@@ -4,7 +4,7 @@
 
 use clap::{Parser, Subcommand};
 use memvid_rs::{Config, MemvidEncoder, MemvidRetriever};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "memvid-rs")]
@@ -45,13 +45,9 @@ enum Commands {
         #[arg(required = true)]
         inputs: Vec<PathBuf>,
 
-        /// Output video file
-        #[arg(short, long, default_value = "memory.mp4")]
+        /// Output base path (e.g. "memory" → memory.mp4 + memory_index.db)
+        #[arg(short, long, default_value = "memory")]
         output: PathBuf,
-
-        /// Output index file (SQLite database)
-        #[arg(short, long, default_value = "memory_index.db")]
-        index: PathBuf,
 
         /// Chunk size in characters
         #[arg(long, default_value = "1024")]
@@ -64,16 +60,11 @@ enum Commands {
 
     /// Search within a QR code video
     Search {
-        /// Video file to search
-        #[arg(short, long)]
-        video: PathBuf,
-
-        /// Index file (SQLite database)
-        #[arg(short, long)]
-        index: PathBuf,
-
         /// Search query
         query: String,
+
+        /// Knowledge base file (e.g. "notes", "notes.mp4", or "/path/to/notes")
+        file: PathBuf,
 
         /// Number of results to return
         #[arg(short = 'k', long, default_value = "5")]
@@ -82,24 +73,14 @@ enum Commands {
 
     /// Interactive chat with your documents
     Chat {
-        /// Video file
-        #[arg(short, long)]
-        video: PathBuf,
-
-        /// Index file (SQLite database)
-        #[arg(short, long)]
-        index: PathBuf,
+        /// Knowledge base file (e.g. "notes", "notes.mp4", or "/path/to/notes")
+        file: PathBuf,
     },
 
     /// Add new content to existing knowledge base (incremental update)
     Append {
-        /// Existing video file to append to
-        #[arg(short, long)]
-        video: PathBuf,
-
-        /// Existing index file (SQLite database)
-        #[arg(short, long)]
-        index: PathBuf,
+        /// Existing knowledge base file (e.g. "notes", "notes.mp4", or "/path/to/notes")
+        file: PathBuf,
 
         /// New input file(s) to add
         #[arg(required = true)]
@@ -108,18 +89,32 @@ enum Commands {
 
     /// Store LLM conversation history to knowledge base
     AppendConversation {
-        /// Existing video file to append to
-        #[arg(short, long)]
-        video: PathBuf,
-
-        /// Existing index file (SQLite database)
-        #[arg(short, long)]
-        index: PathBuf,
+        /// Existing knowledge base file (e.g. "notes", "notes.mp4", or "/path/to/notes")
+        file: PathBuf,
 
         /// Conversation history file (JSON format: [{"human": "...", "assistant": "..."}])
         #[arg(short, long)]
         conversation_file: PathBuf,
     },
+}
+
+/// Resolve a base path into (video_path, index_path).
+///
+/// - "foo"       → ("foo.mp4", "foo_index.db")
+/// - "foo.mp4"   → ("foo.mp4", "foo_index.db")
+/// - "/path/foo" → ("/path/foo.mp4", "/path/foo_index.db")
+fn resolve_paths(file: &Path) -> (PathBuf, PathBuf) {
+    let base = if file.extension().and_then(|e| e.to_str()) == Some("mp4") {
+        file.with_extension("")
+    } else {
+        file.to_path_buf()
+    };
+    let video = base.with_extension("mp4");
+    let index = base.with_file_name(format!(
+        "{}_index.db",
+        base.file_name().unwrap().to_string_lossy()
+    ));
+    (video, index)
 }
 
 /// Build a Config with priority: CLI flags > env vars > config file > defaults.
@@ -173,35 +168,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Encode {
             inputs,
             output,
-            index,
             chunk_size,
             overlap,
         } => {
-            encode_command(inputs, output, index, chunk_size, overlap, config).await?;
+            let (video, index) = resolve_paths(&output);
+            encode_command(inputs, video, index, chunk_size, overlap, config).await?;
         }
         Commands::Search {
-            video,
-            index,
             query,
+            file,
             top_k,
         } => {
+            let (video, index) = resolve_paths(&file);
             search_command(video, index, query, top_k, config).await?;
         }
-        Commands::Chat { video, index } => {
+        Commands::Chat { file } => {
+            let (video, index) = resolve_paths(&file);
             chat_command(video, index, config).await?;
         }
-        Commands::Append {
-            video,
-            index,
-            inputs,
-        } => {
+        Commands::Append { file, inputs } => {
+            let (video, index) = resolve_paths(&file);
             append_command(video, index, inputs, config).await?;
         }
         Commands::AppendConversation {
-            video,
-            index,
+            file,
             conversation_file,
         } => {
+            let (video, index) = resolve_paths(&file);
             append_conversation_command(video, index, conversation_file, config).await?;
         }
     }
@@ -514,10 +507,99 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_resolve_paths_bare_name() {
+        let (video, index) = resolve_paths(Path::new("notes"));
+        assert_eq!(video, PathBuf::from("notes.mp4"));
+        assert_eq!(index, PathBuf::from("notes_index.db"));
+    }
+
+    #[test]
+    fn test_resolve_paths_with_mp4_extension() {
+        let (video, index) = resolve_paths(Path::new("notes.mp4"));
+        assert_eq!(video, PathBuf::from("notes.mp4"));
+        assert_eq!(index, PathBuf::from("notes_index.db"));
+    }
+
+    #[test]
+    fn test_resolve_paths_absolute() {
+        let (video, index) =
+            resolve_paths(Path::new("/Users/me/Library/Caches/prolog-router/apple_notes"));
+        assert_eq!(
+            video,
+            PathBuf::from("/Users/me/Library/Caches/prolog-router/apple_notes.mp4")
+        );
+        assert_eq!(
+            index,
+            PathBuf::from("/Users/me/Library/Caches/prolog-router/apple_notes_index.db")
+        );
+    }
+
+    #[test]
+    fn test_resolve_paths_absolute_with_extension() {
+        let (video, index) =
+            resolve_paths(Path::new("/Users/me/Library/Caches/prolog-router/apple_notes.mp4"));
+        assert_eq!(
+            video,
+            PathBuf::from("/Users/me/Library/Caches/prolog-router/apple_notes.mp4")
+        );
+        assert_eq!(
+            index,
+            PathBuf::from("/Users/me/Library/Caches/prolog-router/apple_notes_index.db")
+        );
+    }
+
+    #[test]
     fn test_cli_parsing() {
-        // Test that CLI parsing works
         let cli = Cli::try_parse_from(&["memvid-rs", "encode", "test.txt"]);
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_search_positional() {
+        let cli =
+            Cli::try_parse_from(&["memvid-rs", "search", "royal subjects", "apple_notes.mp4"]);
+        assert!(cli.is_ok());
+        if let Commands::Search { query, file, .. } = cli.unwrap().command {
+            assert_eq!(query, "royal subjects");
+            assert_eq!(file, PathBuf::from("apple_notes.mp4"));
+        } else {
+            panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_cli_search_bare_name() {
+        let cli = Cli::try_parse_from(&["memvid-rs", "search", "test query", "notes"]);
+        assert!(cli.is_ok());
+        if let Commands::Search { query, file, .. } = cli.unwrap().command {
+            assert_eq!(query, "test query");
+            assert_eq!(file, PathBuf::from("notes"));
+        } else {
+            panic!("Expected Search command");
+        }
+    }
+
+    #[test]
+    fn test_cli_chat_positional() {
+        let cli = Cli::try_parse_from(&["memvid-rs", "chat", "notes.mp4"]);
+        assert!(cli.is_ok());
+        if let Commands::Chat { file } = cli.unwrap().command {
+            assert_eq!(file, PathBuf::from("notes.mp4"));
+        } else {
+            panic!("Expected Chat command");
+        }
+    }
+
+    #[test]
+    fn test_cli_append_positional() {
+        let cli = Cli::try_parse_from(&["memvid-rs", "append", "notes", "new_doc.txt"]);
+        assert!(cli.is_ok());
+        if let Commands::Append { file, inputs } = cli.unwrap().command {
+            assert_eq!(file, PathBuf::from("notes"));
+            assert_eq!(inputs, vec![PathBuf::from("new_doc.txt")]);
+        } else {
+            panic!("Expected Append command");
+        }
     }
 
     #[test]
@@ -527,11 +609,8 @@ mod tests {
             "--config",
             "test.toml",
             "search",
-            "-v",
-            "video.mp4",
-            "-i",
-            "index.db",
             "test query",
+            "notes.mp4",
         ]);
         assert!(cli.is_ok());
         let cli = cli.unwrap();
@@ -551,11 +630,8 @@ mod tests {
             "--document-prefix",
             "passage: ",
             "search",
-            "-v",
-            "video.mp4",
-            "-i",
-            "index.db",
             "test query",
+            "notes.mp4",
         ]);
         assert!(cli.is_ok());
         let cli = cli.unwrap();
@@ -583,7 +659,9 @@ mod tests {
             std::env::var("MEMVID_MODEL_NAME")
                 .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".to_string())
         );
-        assert!(config.ml.embedding_api_url.is_none() || std::env::var("EMBEDDING_API_URL").is_ok());
+        assert!(
+            config.ml.embedding_api_url.is_none() || std::env::var("EMBEDDING_API_URL").is_ok()
+        );
     }
 
     #[test]
