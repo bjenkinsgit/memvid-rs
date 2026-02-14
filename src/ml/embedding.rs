@@ -56,6 +56,10 @@ pub struct EmbeddingConfig {
     pub batch_size: usize,
     /// Device to use for inference
     pub device_type: DeviceType,
+    /// Remote embedding API URL (OpenAI-compatible)
+    pub embedding_api_url: Option<String>,
+    /// Model name for remote embedding API
+    pub embedding_api_model: Option<String>,
 }
 
 impl Default for EmbeddingConfig {
@@ -77,6 +81,8 @@ impl Default for EmbeddingConfig {
             normalize: true,
             batch_size: 32,
             device_type,
+            embedding_api_url: None,
+            embedding_api_model: None,
         }
     }
 }
@@ -91,6 +97,8 @@ impl EmbeddingConfig {
             model_name: ml.model_name.clone(),
             max_length: ml.max_sequence_length,
             batch_size: ml.batch_size,
+            embedding_api_url: ml.embedding_api_url.clone(),
+            embedding_api_model: ml.embedding_api_model.clone(),
             ..Default::default()
         }
     }
@@ -117,15 +125,59 @@ pub struct EmbeddingModel {
     bert_model: Option<BertModel>,
     /// Shared reference to the process-wide BERT model singleton
     shared_bert: Option<Arc<SharedBertModel>>,
+    /// HTTP client for remote embedding API (None = local BERT)
+    api_client: Option<reqwest::Client>,
+    /// Embedding dimension from remote API (discovered from first response)
+    remote_dimension: usize,
+    /// API URL for remote embeddings
+    api_url: Option<String>,
+    /// Model name for remote API requests
+    api_model: Option<String>,
 }
 
 impl EmbeddingModel {
-    /// Create new embedding model with real Candle inference.
+    /// Create new embedding model with real Candle inference or remote API.
     ///
-    /// On the first call in a process, downloads (if needed) and loads the full BERT model
-    /// (~300ms). Subsequent calls reuse the cached model via a process-wide singleton,
-    /// only re-loading the lightweight tokenizer from disk.
+    /// When `embedding_api_url` is set in config, skips BERT initialization entirely
+    /// and uses the remote OpenAI-compatible embedding API instead (~0ms init).
+    ///
+    /// Otherwise, on the first call in a process, downloads (if needed) and loads the full
+    /// BERT model (~300ms). Subsequent calls reuse the cached model via a process-wide
+    /// singleton, only re-loading the lightweight tokenizer from disk.
     pub async fn new(config: EmbeddingConfig) -> Result<Self> {
+        // Remote API path: skip all BERT initialization
+        if let Some(ref api_url) = config.embedding_api_url {
+            log::info!("Using remote embedding API at {}", api_url);
+            let client = reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .map_err(|e| {
+                    MemvidError::MachineLearning(format!("Failed to create HTTP client: {}", e))
+                })?;
+
+            let text_config = TextConfig {
+                max_length: config.max_length,
+                ..Default::default()
+            };
+            let text_processor = TextProcessor::new(text_config);
+            let model_manager = ModelManager::new(None)?;
+
+            return Ok(Self {
+                api_url: Some(api_url.clone()),
+                api_model: config.embedding_api_model.clone(),
+                api_client: Some(client),
+                remote_dimension: 0, // discovered from first API response
+                config,
+                text_processor,
+                cache: HashMap::new(),
+                model_manager,
+                is_ready: true,
+                device: Device::Cpu,
+                bert_model: None,
+                shared_bert: None,
+            });
+        }
+
         // Fast path: reuse the process-wide cached BERT model (only if model name matches)
         if let Some(shared) = SHARED_BERT.get() {
             if shared.model_name != config.model_name {
@@ -161,6 +213,10 @@ impl EmbeddingModel {
                 device: shared.device.clone(),
                 bert_model: None,
                 shared_bert: Some(Arc::clone(shared)),
+                api_client: None,
+                remote_dimension: 0,
+                api_url: None,
+                api_model: None,
             });
             } // else (model name matches)
         }
@@ -185,6 +241,10 @@ impl EmbeddingModel {
             device: Device::Cpu,
             bert_model: None,
             shared_bert: None,
+            api_client: None,
+            remote_dimension: 0,
+            api_url: None,
+            api_model: None,
         };
 
         // Try to load the model
@@ -597,19 +657,115 @@ impl EmbeddingModel {
         embedding
     }
 
-    /// Generate embedding for a single text using TRUE BERT neural network inference
+    /// Call the remote OpenAI-compatible embedding API for a batch of texts.
+    ///
+    /// Uses `block_in_place` + `block_on` to bridge sync→async because this
+    /// sync method is called from within a tokio runtime (via MemvidEncoder).
+    fn encode_via_api(&mut self, texts: &[&str]) -> Result<Vec<Embedding>> {
+        let client = self.api_client.as_ref().ok_or_else(|| {
+            MemvidError::MachineLearning("API client not initialized".to_string())
+        })?
+        .clone();
+        let url = self.api_url.as_ref().ok_or_else(|| {
+            MemvidError::MachineLearning("API URL not set".to_string())
+        })?
+        .clone();
+        let model = self
+            .api_model
+            .as_deref()
+            .unwrap_or("text-embedding-model")
+            .to_string();
+
+        #[derive(Deserialize)]
+        struct EmbeddingData {
+            embedding: Vec<f32>,
+        }
+        #[derive(Deserialize)]
+        struct EmbeddingResponse {
+            data: Vec<EmbeddingData>,
+        }
+
+        let body = serde_json::json!({
+            "input": texts,
+            "model": model,
+        });
+
+        log::debug!("Calling embedding API with {} texts", texts.len());
+
+        // Bridge sync → async: we're inside a tokio runtime, so use
+        // block_in_place to avoid blocking the executor thread.
+        let resp = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                client
+                    .post(&url)
+                    .json(&body)
+                    .send()
+                    .await
+            })
+        })
+        .map_err(|e| {
+            MemvidError::MachineLearning(format!("Embedding API request failed: {}", e))
+        })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body_text = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(resp.text())
+            })
+            .unwrap_or_default();
+            return Err(MemvidError::MachineLearning(format!(
+                "Embedding API returned {}: {}",
+                status, body_text
+            )));
+        }
+
+        let response: EmbeddingResponse = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(resp.json())
+        })
+        .map_err(|e| {
+            MemvidError::MachineLearning(format!("Failed to parse embedding API response: {}", e))
+        })?;
+
+        if response.data.is_empty() {
+            return Err(MemvidError::MachineLearning(
+                "Embedding API returned empty data".to_string(),
+            ));
+        }
+
+        // Discover dimension from first response
+        if self.remote_dimension == 0 {
+            self.remote_dimension = response.data[0].embedding.len();
+            log::info!(
+                "Remote embedding dimension: {} (from API)",
+                self.remote_dimension
+            );
+        }
+
+        Ok(response.data.into_iter().map(|d| d.embedding).collect())
+    }
+
+    /// Generate embedding for a single text using BERT inference or remote API
     pub fn encode(&mut self, text: &str) -> Result<Embedding> {
         // Check cache first
         if let Some(cached) = self.cache.get(text) {
-            log::trace!("Using cached BERT embedding");
+            log::trace!("Using cached embedding");
             return Ok(cached.clone());
         }
 
-        let embedding = if self.is_ready
+        let embedding = if self.api_client.is_some() {
+            // Use remote embedding API
+            let results = self.encode_via_api(&[text])?;
+            results
+                .into_iter()
+                .next()
+                .ok_or_else(|| {
+                    MemvidError::MachineLearning("API returned no embeddings".to_string())
+                })?
+        } else if self.is_ready
             && (self.bert_model.is_some() || self.shared_bert.is_some())
         {
             // Use TRUE BERT neural network inference
-            log::debug!("🧠 Generating TRUE BERT embedding for: {}", text);
+            log::debug!("Generating BERT embedding for: {}", text);
             self.generate_bert_embedding(text)?
         } else {
             // Fail explicitly - no fallback for true semantic search
@@ -625,8 +781,41 @@ impl EmbeddingModel {
         Ok(embedding)
     }
 
-    /// Generate embeddings for multiple texts using batched BERT inference
+    /// Generate embeddings for multiple texts using batched BERT inference or remote API
     pub fn encode_batch(&mut self, texts: &[String]) -> Result<Vec<Embedding>> {
+        if self.api_client.is_some() {
+            // Remote API path: batch into config.batch_size-sized API calls
+            let mut all_embeddings = Vec::with_capacity(texts.len());
+            for chunk in texts.chunks(self.config.batch_size) {
+                // Check cache first, only send uncached texts
+                let mut cached_results: Vec<Option<Embedding>> = vec![None; chunk.len()];
+                let mut uncached_indices = Vec::new();
+                let mut uncached_texts = Vec::new();
+
+                for (i, text) in chunk.iter().enumerate() {
+                    if let Some(cached) = self.cache.get(text.as_str()) {
+                        cached_results[i] = Some(cached.clone());
+                    } else {
+                        uncached_indices.push(i);
+                        uncached_texts.push(text.as_str());
+                    }
+                }
+
+                if !uncached_texts.is_empty() {
+                    let api_results = self.encode_via_api(&uncached_texts)?;
+                    for (batch_idx, &orig_idx) in uncached_indices.iter().enumerate() {
+                        if let Some(emb) = api_results.get(batch_idx) {
+                            self.cache.insert(chunk[orig_idx].clone(), emb.clone());
+                            cached_results[orig_idx] = Some(emb.clone());
+                        }
+                    }
+                }
+
+                all_embeddings.extend(cached_results.into_iter().map(|r| r.unwrap()));
+            }
+            return Ok(all_embeddings);
+        }
+
         if !self.is_ready || (!self.bert_model.is_some() && !self.shared_bert.is_some()) {
             return Err(MemvidError::MachineLearning(
                 "BERT model not loaded - true semantic search requires neural network inference"
@@ -877,7 +1066,11 @@ impl EmbeddingModel {
 
     /// Get embedding dimension
     pub fn dimension(&self) -> usize {
-        384 // MiniLM-L6-v2 dimension
+        if self.api_client.is_some() && self.remote_dimension > 0 {
+            self.remote_dimension
+        } else {
+            384 // Local BERT dimension
+        }
     }
 
     /// Get embedding model health status

@@ -147,6 +147,14 @@ pub struct MlConfig {
 
     /// Enable model quantization for smaller memory footprint
     pub quantization: bool,
+
+    /// Remote embedding API URL (OpenAI-compatible, e.g. http://host:8000/v1/embeddings)
+    #[serde(default)]
+    pub embedding_api_url: Option<String>,
+
+    /// Model name for remote embedding API
+    #[serde(default)]
+    pub embedding_api_model: Option<String>,
 }
 
 /// Search configuration
@@ -287,6 +295,8 @@ impl Default for MlConfig {
             batch_size: 32,
             cache_dir: None,
             quantization: false,
+            embedding_api_url: None,
+            embedding_api_model: None,
         }
     }
 }
