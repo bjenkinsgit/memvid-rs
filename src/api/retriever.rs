@@ -457,8 +457,8 @@ impl MemvidRetriever {
             .extract_frame(&self.video_path, frame_number)
             .await?;
 
-        // Decode QR code from frame
-        let qr_result = self.qr_decoder.decode_image(&frame_image)?;
+        // Decode QR code from frame (with preprocessing fallbacks for compression artifacts)
+        let qr_result = self.qr_decoder.decode_with_preprocessing(&frame_image)?;
         let content = qr_result.text;
 
         // Cache the result
@@ -509,7 +509,7 @@ impl MemvidRetriever {
                         .extract_frame(&video_path, frame_number)
                         .await?;
                     let qr_decoder = QrDecoder::new();
-                    let qr_result = qr_decoder.decode_image(&frame_image)?;
+                    let qr_result = qr_decoder.decode_with_preprocessing(&frame_image)?;
                     Ok::<(u32, String), MemvidError>((frame_number, qr_result.text))
                 });
                 tasks.push(task);
@@ -575,7 +575,7 @@ impl MemvidRetriever {
             .video_decoder
             .extract_frame(&self.video_path, frame_number)
             .await?;
-        let qr_result = self.qr_decoder.decode_image(&frame_image)?;
+        let qr_result = self.qr_decoder.decode_with_preprocessing(&frame_image)?;
         Ok(qr_result.text)
     }
 

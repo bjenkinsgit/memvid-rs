@@ -276,7 +276,7 @@ impl Default for QrConfig {
     fn default() -> Self {
         Self {
             version: None, // Auto-detect
-            error_correction: ErrorCorrectionLevel::Medium,
+            error_correction: ErrorCorrectionLevel::High,
             box_size: 10,
             border: 4,
             fill_color: "black".to_string(),
@@ -290,10 +290,10 @@ impl Default for QrConfig {
 impl Default for VideoConfig {
     fn default() -> Self {
         let mut quality_params = HashMap::new();
-        // H.265 parameters for QR code preservation (using compatible options)
-        quality_params.insert("crf".to_string(), "28".to_string());
+        // H.265 parameters for QR code preservation
+        quality_params.insert("crf".to_string(), "18".to_string()); // High quality — minimal size impact at 256x256
         quality_params.insert("preset".to_string(), "slower".to_string());
-        quality_params.insert("tune".to_string(), "zerolatency".to_string()); // Use zerolatency instead of stillimage
+        // No tune — zerolatency hurts compression and has no benefit for offline encoding
         quality_params.insert("profile".to_string(), "main".to_string());
         quality_params.insert("pix_fmt".to_string(), "yuv420p".to_string());
 

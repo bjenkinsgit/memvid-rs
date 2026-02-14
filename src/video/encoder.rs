@@ -95,12 +95,16 @@ impl VideoEncoder {
         encoder.set_time_base(ffmpeg_next::Rational::new(1, self.config.fps as i32));
         encoder.set_frame_rate(Some(ffmpeg_next::Rational::new(self.config.fps as i32, 1)));
 
+        // Force all-keyframe encoding — QR frames have no inter-frame redundancy
+        // and this enables frame-accurate seeking without GOP complications
+        encoder.set_gop(1);
+
         // Set codec parameters based on encoder type
         let mut dictionary = ffmpeg_next::Dictionary::new();
 
         if using_videotoolbox {
             // VideoToolbox hardware encoder — use bitrate control, not x265 CRF/preset
-            encoder.set_bit_rate(4_000_000); // 4 Mbps — generous for 256x256 QR frames
+            encoder.set_bit_rate(8_000_000); // 8 Mbps — high quality for QR fidelity at 256x256
             dictionary.set("allow_sw", "0"); // hardware only
             dictionary.set("realtime", "0"); // quality over speed
             dictionary.set("profile", "main");

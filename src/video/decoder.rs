@@ -194,9 +194,10 @@ impl VideoDecoder {
         )
         .map_err(|e| MemvidError::Video(format!("Failed to create scaler: {}", e)))?;
 
-        let mut current_frame = 0u32;
-
-        // Process packets until we find our target frame
+        // Process packets until we find our target frame using PTS-based matching.
+        // After seeking, the decoder resumes from the nearest keyframe — a counter
+        // reset to 0 would never match the absolute frame number past the seek point.
+        // PTS comparison handles this correctly for both seeked and non-seeked cases.
         for (stream, packet) in input_ctx.packets() {
             if stream.index() == video_stream_index {
                 decoder
@@ -205,8 +206,11 @@ impl VideoDecoder {
 
                 let mut decoded_frame = ffmpeg_next::frame::Video::empty();
                 while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                    if current_frame == frame_number {
-                        // Found our target frame, convert and return it
+                    let pts = decoded_frame.pts().unwrap_or(0);
+
+                    // For frame 0 (no seek), take the first decoded frame.
+                    // For other frames, match by PTS >= target timestamp.
+                    if frame_number == 0 || pts >= target_timestamp {
                         let mut rgb_frame = ffmpeg_next::frame::Video::new(
                             ffmpeg_next::format::Pixel::RGB24,
                             width,
@@ -219,19 +223,13 @@ impl VideoDecoder {
 
                         let image = self.frame_to_image(&rgb_frame)?;
 
-                        log::debug!("Successfully extracted frame {} from video", frame_number);
+                        log::debug!(
+                            "Successfully extracted frame {} (pts={}) from video",
+                            frame_number,
+                            pts
+                        );
                         return Ok(image);
                     }
-                    current_frame += 1;
-
-                    // Stop processing if we've gone past our target
-                    if current_frame > frame_number {
-                        break;
-                    }
-                }
-
-                if current_frame > frame_number {
-                    break;
                 }
             }
         }
@@ -482,10 +480,11 @@ impl VideoDecoder {
         )
         .map_err(|e| MemvidError::Video(format!("Failed to create scaler: {}", e)))?;
 
-        let mut current_frame = 0u32;
+        let expected_count = (end_frame - start_frame + 1) as usize;
         let mut extracted_frames = Vec::new();
 
-        // Process packets and collect frames in the range
+        // Process packets and collect frames in the range using PTS-based matching.
+        // After seeking, counter-based matching fails (same bug as extract_frame).
         for (stream, packet) in input_ctx.packets() {
             if stream.index() == video_stream_index {
                 decoder
@@ -494,26 +493,29 @@ impl VideoDecoder {
 
                 let mut decoded_frame = ffmpeg_next::frame::Video::empty();
                 while decoder.receive_frame(&mut decoded_frame).is_ok() {
-                    if current_frame >= start_frame && current_frame <= end_frame {
-                        // Frame is in our target range, convert and store it
-                        let mut rgb_frame = ffmpeg_next::frame::Video::new(
-                            ffmpeg_next::format::Pixel::RGB24,
-                            width,
-                            height,
-                        );
+                    let pts = decoded_frame.pts().unwrap_or(0);
 
-                        scaler.run(&decoded_frame, &mut rgb_frame).map_err(|e| {
-                            MemvidError::Video(format!("Failed to scale frame: {}", e))
-                        })?;
-
-                        let image = self.frame_to_image(&rgb_frame)?;
-                        extracted_frames.push(image);
+                    // Skip frames before our target range (seek may land earlier)
+                    if start_frame > 0 && pts < start_timestamp {
+                        continue;
                     }
 
-                    current_frame += 1;
+                    // Frame is in our target range, convert and store it
+                    let mut rgb_frame = ffmpeg_next::frame::Video::new(
+                        ffmpeg_next::format::Pixel::RGB24,
+                        width,
+                        height,
+                    );
 
-                    // Stop processing if we've gone past our target range
-                    if current_frame > end_frame {
+                    scaler.run(&decoded_frame, &mut rgb_frame).map_err(|e| {
+                        MemvidError::Video(format!("Failed to scale frame: {}", e))
+                    })?;
+
+                    let image = self.frame_to_image(&rgb_frame)?;
+                    extracted_frames.push(image);
+
+                    // Stop once we've collected all frames in the range
+                    if extracted_frames.len() >= expected_count {
                         log::debug!(
                             "Successfully extracted {} frames ({}-{})",
                             extracted_frames.len(),
@@ -522,11 +524,6 @@ impl VideoDecoder {
                         );
                         return Ok(extracted_frames);
                     }
-                }
-
-                // If we've collected all frames in range, stop processing
-                if current_frame > end_frame {
-                    break;
                 }
             }
         }
