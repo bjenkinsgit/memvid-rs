@@ -126,6 +126,36 @@ impl ModelManager {
             mini_lm,
         );
 
+        // Register BGE-small-en-v1.5 (retrieval-optimized, same 384 dims)
+        let bge_small_full_dir = self.cache_dir.join("BAAI/bge-small-en-v1.5");
+        let bge_small_short_dir = self.cache_dir.join("bge-small-en-v1.5");
+        let (bge_small_cached, bge_small_dir) =
+            if Self::validate_model_files_static(&bge_small_full_dir).unwrap_or(false) {
+                (true, Some(bge_small_full_dir))
+            } else if Self::validate_model_files_static(&bge_small_short_dir).unwrap_or(false) {
+                (true, Some(bge_small_short_dir))
+            } else {
+                (false, None)
+            };
+
+        let bge_small = ModelInfo {
+            name: "bge-small-en-v1.5".to_string(),
+            model_type: ModelType::SentenceTransformer,
+            local_path: bge_small_dir,
+            hub_id: Some("BAAI/bge-small-en-v1.5".to_string()),
+            config: ModelConfig {
+                dimension: 384,
+                max_length: 512,
+                cached: bge_small_cached,
+                params: HashMap::new(),
+            },
+        };
+
+        self.models
+            .insert("bge-small-en-v1.5".to_string(), bge_small.clone());
+        self.models
+            .insert("BAAI/bge-small-en-v1.5".to_string(), bge_small);
+
         // Register other common models
         let bert_dir = self.cache_dir.join("bert-base-uncased");
         let bert_cached = Self::validate_model_files_static(&bert_dir).unwrap_or(false);
