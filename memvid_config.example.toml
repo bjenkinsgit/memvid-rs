@@ -1,0 +1,96 @@
+# Memvid-rs Configuration
+#
+# Copy this file to memvid_config.toml and customize as needed.
+# Pass to the CLI with: memvid-rs --config memvid_config.toml <command>
+# All values shown are defaults unless noted otherwise.
+
+[chunking]
+# Size of text chunks in characters
+chunk_size = 1024
+
+# Overlap between chunks in characters (preserves context across boundaries)
+overlap = 32
+
+[ml]
+# Device for local BERT embeddings: "auto", "cpu", "metal" (macOS), "cuda" (NVIDIA)
+device = "auto"
+
+# BERT model for semantic embeddings (HuggingFace model ID)
+# Default: sentence-transformers/all-MiniLM-L6-v2 (384-dim, fast, good quality)
+# Alternative: BAAI/bge-small-en-v1.5 (384-dim, slightly better quality)
+# model_name = "sentence-transformers/all-MiniLM-L6-v2"
+
+# Batch size for embedding generation
+# For local BERT: smaller values use less GPU memory (8 is safe for Metal)
+# For remote API: higher values reduce HTTP round-trips during index builds
+batch_size = 32
+
+# --- Remote Embedding API (optional) ---
+# Use an OpenAI-compatible embedding API instead of local BERT.
+# WARNING: Switching between local and remote changes embedding dimensions;
+# rebuild your index after switching.
+#
+# embedding_api_url = "http://localhost:8000/v1/embeddings"
+# embedding_api_model = "intfloat/e5-mistral-7b-instruct"
+#
+# Prefix prepended to search queries for asymmetric/instruction-tuned models.
+# Leave empty or omit for symmetric models (BGE-small, MiniLM, etc.)
+# Examples:
+#   E5-Mistral: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+#   Nomic:      "search_query: "
+#   E5 v2:      "query: "
+# embedding_query_prefix = ""
+#
+# Optional prefix for document chunks during indexing (most models don't need this).
+# Examples:
+#   Nomic: "search_document: "
+#   E5 v2: "passage: "
+# embedding_document_prefix = ""
+
+[qr]
+# Error correction level: "low", "medium", "quartile", "high"
+# Lower = more data capacity, higher = more redundancy
+error_correction = "medium"
+
+# QR code version (1-40). Higher = more capacity per frame.
+# Version 40 has maximum capacity (~2950 bytes at low EC).
+# Omit to auto-detect based on content size.
+# version = 40
+
+# Enable gzip compression for chunks before QR encoding
+enable_compression = true
+
+# Only compress chunks larger than this many bytes
+compression_threshold = 100
+
+[search]
+# Default number of results for CLI search and chat (CLI -k overrides)
+max_results = 5
+
+[search.hnsw]
+# HNSW (Hierarchical Navigable Small World) vector search parameters
+# Higher ef_search improves recall at the cost of slower queries.
+# Default 50 is tuned for 384-dim models; increase for high-dim (e.g. 4096-dim).
+# ef_search = 50
+
+# Max connections per node in the HNSW graph
+# Higher values improve recall but increase memory and build time
+# max_connections = 16
+
+# Size of dynamic candidate list during index construction
+# ef_construction = 200
+
+[video]
+# FFmpeg library log level (controls swscaler warnings, etc.)
+# Options: "quiet", "panic", "fatal", "error", "warning", "info", "verbose", "debug", "trace"
+library_log_level = "error"
+
+# FFmpeg CLI log level (for concat and other CLI operations)
+ffmpeg_cli_log_level = "error"
+
+# Hide FFmpeg CLI banner (version info, build config)
+ffmpeg_hide_banner = true
+
+# x265 encoder log level
+# Options: "none", "error", "warning", "info", "debug", "full"
+x265_log_level = "error"
