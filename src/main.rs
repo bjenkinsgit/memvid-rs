@@ -3,7 +3,7 @@
 //! Command-line interface for the memvid-rs library.
 
 use clap::{Parser, Subcommand};
-use memvid_rs::{MemvidEncoder, MemvidRetriever};
+use memvid_rs::{Config, MemvidEncoder, MemvidRetriever};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -13,6 +13,26 @@ use std::path::PathBuf;
 )]
 #[command(version)]
 struct Cli {
+    /// Path to TOML config file (e.g. memvid_config.toml)
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Remote embedding API URL (overrides config file and EMBEDDING_API_URL env var)
+    #[arg(long, global = true)]
+    embedding_api_url: Option<String>,
+
+    /// Remote embedding model name (overrides config file and EMBEDDING_API_MODEL env var)
+    #[arg(long, global = true)]
+    embedding_api_model: Option<String>,
+
+    /// Query prefix for asymmetric/instruction-tuned embedding models
+    #[arg(long, global = true)]
+    query_prefix: Option<String>,
+
+    /// Document prefix for asymmetric/instruction-tuned embedding models
+    #[arg(long, global = true)]
+    document_prefix: Option<String>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -102,22 +122,62 @@ enum Commands {
     },
 }
 
+/// Build a Config with priority: CLI flags > env vars > config file > defaults.
+fn build_config(cli: &Cli) -> Result<Config, Box<dyn std::error::Error>> {
+    let mut config = match &cli.config {
+        Some(path) => {
+            eprintln!("Loading config from: {}", path.display());
+            Config::from_toml_file(path)?
+        }
+        None => Config::default(),
+    };
+
+    // Env var fallbacks (only if not already set by config file)
+    if config.ml.embedding_api_url.is_none() {
+        if let Ok(url) = std::env::var("EMBEDDING_API_URL") {
+            config.ml.embedding_api_url = Some(url);
+        }
+    }
+    if config.ml.embedding_api_model.is_none() {
+        if let Ok(model) = std::env::var("EMBEDDING_API_MODEL") {
+            config.ml.embedding_api_model = Some(model);
+        }
+    }
+
+    // CLI flags override everything
+    if let Some(ref url) = cli.embedding_api_url {
+        config.ml.embedding_api_url = Some(url.clone());
+    }
+    if let Some(ref model) = cli.embedding_api_model {
+        config.ml.embedding_api_model = Some(model.clone());
+    }
+    if let Some(ref prefix) = cli.query_prefix {
+        config.ml.embedding_query_prefix = Some(prefix.clone());
+    }
+    if let Some(ref prefix) = cli.document_prefix {
+        config.ml.embedding_document_prefix = Some(prefix.clone());
+    }
+
+    Ok(config)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     env_logger::init();
 
     let cli = Cli::parse();
+    let config = build_config(&cli)?;
 
     match cli.command {
         Commands::Encode {
             inputs,
             output,
             index,
-            chunk_size: _,
-            overlap: _,
+            chunk_size,
+            overlap,
         } => {
-            encode_command(inputs, output, index).await?;
+            encode_command(inputs, output, index, chunk_size, overlap, config).await?;
         }
         Commands::Search {
             video,
@@ -125,24 +185,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             query,
             top_k,
         } => {
-            search_command(video, index, query, top_k).await?;
+            search_command(video, index, query, top_k, config).await?;
         }
         Commands::Chat { video, index } => {
-            chat_command(video, index).await?;
+            chat_command(video, index, config).await?;
         }
         Commands::Append {
             video,
             index,
             inputs,
         } => {
-            append_command(video, index, inputs).await?;
+            append_command(video, index, inputs, config).await?;
         }
         Commands::AppendConversation {
             video,
             index,
             conversation_file,
         } => {
-            append_conversation_command(video, index, conversation_file).await?;
+            append_conversation_command(video, index, conversation_file, config).await?;
         }
     }
 
@@ -153,10 +213,16 @@ async fn encode_command(
     inputs: Vec<PathBuf>,
     output: PathBuf,
     index: PathBuf,
+    chunk_size: usize,
+    overlap: usize,
+    mut config: Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🎬 Starting memvid encoding...");
 
-    let mut encoder = MemvidEncoder::new(None).await?;
+    config.chunking.chunk_size = chunk_size;
+    config.chunking.overlap = overlap;
+
+    let mut encoder = MemvidEncoder::new(Some(config)).await?;
 
     for input in inputs {
         println!("📄 Processing: {}", input.display());
@@ -212,10 +278,11 @@ async fn search_command(
     index: PathBuf,
     query: String,
     top_k: usize,
+    config: Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Searching for: \"{}\"", query);
 
-    let mut retriever = MemvidRetriever::new(&video, &index).await?;
+    let mut retriever = MemvidRetriever::new_with_config(&video, &index, Some(config)).await?;
     let results = retriever.search(&query, top_k).await?;
 
     if results.is_empty() {
@@ -235,12 +302,16 @@ async fn search_command(
     Ok(())
 }
 
-async fn chat_command(video: PathBuf, index: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+async fn chat_command(
+    video: PathBuf,
+    index: PathBuf,
+    config: Config,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("💬 Starting interactive chat mode...");
     println!("   Type 'quit' or 'exit' to end the session");
     println!();
 
-    let mut retriever = MemvidRetriever::new(&video, &index).await?;
+    let mut retriever = MemvidRetriever::new_with_config(&video, &index, Some(config)).await?;
 
     loop {
         print!("❓ Query: ");
@@ -280,6 +351,7 @@ async fn append_command(
     video: PathBuf,
     index: PathBuf,
     inputs: Vec<PathBuf>,
+    config: Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🎬 Starting incremental update...");
 
@@ -293,7 +365,7 @@ async fn append_command(
         return Ok(());
     }
 
-    let mut encoder = MemvidEncoder::new(None).await?;
+    let mut encoder = MemvidEncoder::new(Some(config)).await?;
     let mut total_added_chunks = 0;
     let mut total_processing_time = 0.0;
 
@@ -353,6 +425,7 @@ async fn append_conversation_command(
     video: PathBuf,
     index: PathBuf,
     conversation_file: PathBuf,
+    config: Config,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("🎬 Starting conversation history append...");
 
@@ -374,7 +447,7 @@ async fn append_conversation_command(
         return Ok(());
     }
 
-    let mut encoder = MemvidEncoder::new(None).await?;
+    let mut encoder = MemvidEncoder::new(Some(config)).await?;
 
     println!("📄 Processing conversation history file...");
 
@@ -445,5 +518,94 @@ mod tests {
         // Test that CLI parsing works
         let cli = Cli::try_parse_from(&["memvid-rs", "encode", "test.txt"]);
         assert!(cli.is_ok());
+    }
+
+    #[test]
+    fn test_cli_global_config_flag() {
+        let cli = Cli::try_parse_from(&[
+            "memvid-rs",
+            "--config",
+            "test.toml",
+            "search",
+            "-v",
+            "video.mp4",
+            "-i",
+            "index.db",
+            "test query",
+        ]);
+        assert!(cli.is_ok());
+        let cli = cli.unwrap();
+        assert_eq!(cli.config, Some(PathBuf::from("test.toml")));
+    }
+
+    #[test]
+    fn test_cli_embedding_flags() {
+        let cli = Cli::try_parse_from(&[
+            "memvid-rs",
+            "--embedding-api-url",
+            "http://localhost:8000/v1/embeddings",
+            "--embedding-api-model",
+            "e5-mistral",
+            "--query-prefix",
+            "Instruct: Retrieve relevant passages\nQuery: ",
+            "--document-prefix",
+            "passage: ",
+            "search",
+            "-v",
+            "video.mp4",
+            "-i",
+            "index.db",
+            "test query",
+        ]);
+        assert!(cli.is_ok());
+        let cli = cli.unwrap();
+        assert_eq!(
+            cli.embedding_api_url,
+            Some("http://localhost:8000/v1/embeddings".to_string())
+        );
+        assert_eq!(
+            cli.embedding_api_model,
+            Some("e5-mistral".to_string())
+        );
+        assert_eq!(
+            cli.query_prefix,
+            Some("Instruct: Retrieve relevant passages\nQuery: ".to_string())
+        );
+        assert_eq!(cli.document_prefix, Some("passage: ".to_string()));
+    }
+
+    #[test]
+    fn test_build_config_defaults() {
+        let cli = Cli::try_parse_from(&["memvid-rs", "encode", "test.txt"]).unwrap();
+        let config = build_config(&cli).unwrap();
+        assert_eq!(
+            config.ml.model_name,
+            std::env::var("MEMVID_MODEL_NAME")
+                .unwrap_or_else(|_| "sentence-transformers/all-MiniLM-L6-v2".to_string())
+        );
+        assert!(config.ml.embedding_api_url.is_none() || std::env::var("EMBEDDING_API_URL").is_ok());
+    }
+
+    #[test]
+    fn test_build_config_cli_overrides() {
+        let cli = Cli::try_parse_from(&[
+            "memvid-rs",
+            "--embedding-api-url",
+            "http://test:8000/v1/embeddings",
+            "--query-prefix",
+            "query: ",
+            "encode",
+            "test.txt",
+        ])
+        .unwrap();
+        let config = build_config(&cli).unwrap();
+        assert_eq!(
+            config.ml.embedding_api_url,
+            Some("http://test:8000/v1/embeddings".to_string())
+        );
+        assert_eq!(
+            config.ml.embedding_query_prefix,
+            Some("query: ".to_string())
+        );
     }
 }

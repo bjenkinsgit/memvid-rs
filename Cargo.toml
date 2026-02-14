@@ -20,6 +20,7 @@ rayon = "1.10"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 
 # QR code generation and decoding
 qrcode = "0.14"  # Latest version with improved error recovery
