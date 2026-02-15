@@ -202,13 +202,21 @@ impl VideoEncoder {
                 let global_idx = batch_start + local_idx;
                 let rgb_data = rgb_image.as_raw();
 
-                // Create RGB video frame
+                // Create RGB video frame — copy row-by-row to respect frame stride
+                // (FFmpeg pads rows to alignment boundaries; stride may exceed width*3)
                 let mut frame = ffmpeg_next::frame::Video::new(
                     ffmpeg_next::format::Pixel::RGB24,
                     target_width,
                     target_height,
                 );
-                frame.data_mut(0)[..rgb_data.len()].copy_from_slice(rgb_data);
+                let stride = frame.stride(0);
+                let row_bytes = (target_width * 3) as usize;
+                for y in 0..target_height as usize {
+                    let src_offset = y * row_bytes;
+                    let dst_offset = y * stride;
+                    frame.data_mut(0)[dst_offset..dst_offset + row_bytes]
+                        .copy_from_slice(&rgb_data[src_offset..src_offset + row_bytes]);
+                }
                 frame.set_pts(Some((global_idx as f64 / self.config.fps * 1000.0) as i64));
 
                 // Convert RGB to encoder pixel format (NV12 for VideoToolbox, YUV420P for software)
