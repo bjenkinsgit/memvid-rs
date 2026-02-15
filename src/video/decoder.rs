@@ -7,16 +7,61 @@ use image::DynamicImage;
 use std::path::Path;
 
 /// Video decoder with static FFmpeg support for frame extraction
-pub struct VideoDecoder {}
+pub struct VideoDecoder {
+    /// Enable hardware-accelerated decoding (VideoToolbox on macOS)
+    hardware_acceleration: bool,
+}
 
 impl VideoDecoder {
-    /// Create a new video decoder
+    /// Create a new video decoder with hardware acceleration enabled by default
     pub fn new() -> Result<Self> {
         // Initialize FFmpeg
         ffmpeg_next::init()
             .map_err(|e| MemvidError::Video(format!("FFmpeg init failed: {}", e)))?;
 
-        Ok(Self {})
+        Ok(Self {
+            hardware_acceleration: true,
+        })
+    }
+
+    /// Create a video decoder context, preferring hardware acceleration when available.
+    /// On macOS, tries `hevc_videotoolbox` first for M-series media engine decoding,
+    /// falling back to software HEVC decoder if unavailable.
+    fn create_decoder(
+        &self,
+        stream_parameters: ffmpeg_next::codec::Parameters,
+    ) -> Result<ffmpeg_next::decoder::Video> {
+        if self.hardware_acceleration {
+            if let Some(hw_codec) = ffmpeg_next::decoder::find_by_name("hevc_videotoolbox") {
+                let mut ctx =
+                    ffmpeg_next::codec::context::Context::new_with_codec(hw_codec);
+                if let Ok(()) = ctx.set_parameters(stream_parameters.clone()) {
+                    match ctx.decoder().video() {
+                        Ok(decoder) => {
+                            log::info!("Using hevc_videotoolbox hardware decoder");
+                            return Ok(decoder);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Hardware decoder failed, falling back to software: {}",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback to auto-detected decoder from stream parameters
+        let ctx = ffmpeg_next::codec::context::Context::from_parameters(stream_parameters)
+            .map_err(|e| {
+                MemvidError::Video(format!("Failed to create decoder context: {}", e))
+            })?;
+        let decoder = ctx.decoder().video().map_err(|e| {
+            MemvidError::Video(format!("Failed to create video decoder: {}", e))
+        })?;
+        log::debug!("Using software HEVC decoder");
+        Ok(decoder)
     }
 
     /// Extract all frames from video file
@@ -47,17 +92,8 @@ impl VideoDecoder {
             .stream(video_stream_index)
             .ok_or_else(|| MemvidError::Video("Failed to get video stream".to_string()))?;
 
-        // Create decoder context
-        let context_decoder =
-            ffmpeg_next::codec::context::Context::from_parameters(video_stream.parameters())
-                .map_err(|e| {
-                    MemvidError::Video(format!("Failed to create decoder context: {}", e))
-                })?;
-
-        let mut decoder = context_decoder
-            .decoder()
-            .video()
-            .map_err(|e| MemvidError::Video(format!("Failed to create video decoder: {}", e)))?;
+        // Create decoder context (hardware-accelerated when available)
+        let mut decoder = self.create_decoder(video_stream.parameters())?;
 
         // Get frame dimensions
         let width = decoder.width();
@@ -167,16 +203,8 @@ impl VideoDecoder {
                 })?;
         }
 
-        // Create decoder context
-        let context_decoder = ffmpeg_next::codec::context::Context::from_parameters(
-            stream_parameters,
-        )
-        .map_err(|e| MemvidError::Video(format!("Failed to create decoder context: {}", e)))?;
-
-        let mut decoder = context_decoder
-            .decoder()
-            .video()
-            .map_err(|e| MemvidError::Video(format!("Failed to create video decoder: {}", e)))?;
+        // Create decoder context (hardware-accelerated when available)
+        let mut decoder = self.create_decoder(stream_parameters)?;
 
         // Get frame dimensions
         let width = decoder.width();
@@ -453,16 +481,8 @@ impl VideoDecoder {
                 })?;
         }
 
-        // Create decoder context
-        let context_decoder = ffmpeg_next::codec::context::Context::from_parameters(
-            stream_parameters,
-        )
-        .map_err(|e| MemvidError::Video(format!("Failed to create decoder context: {}", e)))?;
-
-        let mut decoder = context_decoder
-            .decoder()
-            .video()
-            .map_err(|e| MemvidError::Video(format!("Failed to create video decoder: {}", e)))?;
+        // Create decoder context (hardware-accelerated when available)
+        let mut decoder = self.create_decoder(stream_parameters)?;
 
         // Get frame dimensions
         let width = decoder.width();
@@ -564,7 +584,9 @@ impl VideoDecoder {
 
 impl Default for VideoDecoder {
     fn default() -> Self {
-        Self::new().unwrap_or(Self {})
+        Self::new().unwrap_or(Self {
+            hardware_acceleration: true,
+        })
     }
 }
 
