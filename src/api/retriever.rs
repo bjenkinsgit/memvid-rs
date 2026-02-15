@@ -233,13 +233,6 @@ impl MemvidRetriever {
 
         let mut results = Vec::new();
 
-        // Extract frame numbers for smart prefetching BEFORE processing chunks
-        let frame_numbers_for_prefetch: Vec<u32> = valid_chunks
-            .iter()
-            .filter_map(|chunk| chunk.frame)
-            .take(5)
-            .collect();
-
         for chunk in valid_chunks {
             if let Some(ref chunk_embedding) = chunk.embedding {
                 let similarity = self.compute_cosine_similarity(&query_embedding, chunk_embedding);
@@ -256,26 +249,6 @@ impl MemvidRetriever {
             results.len(),
             query
         );
-        log::info!("Found {} results for query '{}'", results.len(), query);
-
-        // 🧠 LLM-OPTIMIZED PREFETCHING: Prefetch relevant frames to improve performance
-        // In LLM scenarios, prefetching helps with follow-up queries and context
-        if !results.is_empty() && frame_numbers_for_prefetch.len() > 1 {
-            // Use conservative prefetching for LLM scenarios
-            let limited_prefetch: Vec<u32> = frame_numbers_for_prefetch
-                .into_iter()
-                .take(3) // Only prefetch top 3 most relevant frames
-                .collect();
-
-            if !limited_prefetch.is_empty() {
-                log::debug!(
-                    "🧠 LLM-optimized prefetching {} most relevant frames",
-                    limited_prefetch.len()
-                );
-                // Use the proper prefetch method that updates the cache
-                self.prefetch_frames(limited_prefetch).await?;
-            }
-        }
 
         Ok(results)
     }
