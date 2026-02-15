@@ -105,6 +105,7 @@ impl VideoEncoder {
         if using_videotoolbox {
             // VideoToolbox hardware encoder — use bitrate control, not x265 CRF/preset
             encoder.set_bit_rate(8_000_000); // 8 Mbps — high quality for QR fidelity at 256x256
+            encoder.set_color_range(ffmpeg_next::color::Range::MPEG); // suppress "Color range not set for nv12" warning
             dictionary.set("allow_sw", "0"); // hardware only
             dictionary.set("realtime", "0"); // quality over speed
             dictionary.set("profile", "main");

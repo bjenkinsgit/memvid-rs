@@ -36,6 +36,12 @@ impl VideoDecoder {
                 let mut ctx =
                     ffmpeg_next::codec::context::Context::new_with_codec(hw_codec);
                 if let Ok(()) = ctx.set_parameters(stream_parameters.clone()) {
+                    // Set color range to MPEG (limited) to suppress VideoToolbox
+                    // "Color range not set for nv12" warning
+                    unsafe {
+                        (*ctx.as_mut_ptr()).color_range =
+                            ffmpeg_next::ffi::AVColorRange::AVCOL_RANGE_MPEG;
+                    }
                     match ctx.decoder().video() {
                         Ok(decoder) => {
                             log::info!("Using hevc_videotoolbox hardware decoder");
