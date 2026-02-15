@@ -624,7 +624,8 @@ impl MemvidEncoder {
             args.push("-hide_banner");
         }
         args.extend(["-loglevel", &self.config.video.ffmpeg_cli_log_level]);
-        args.extend(["-f", "concat", "-safe", "0", "-i", &concat_list_file, "-c", "copy", "-y", output]);
+        // Force MOV muxer for ProRes compatibility (mp4 muxer doesn't support ProRes)
+        args.extend(["-f", "concat", "-safe", "0", "-i", &concat_list_file, "-c", "copy", "-f", "mov", "-y", output]);
 
         let output_status = std::process::Command::new("ffmpeg")
             .args(&args)

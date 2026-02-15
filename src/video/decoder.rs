@@ -8,57 +8,26 @@ use std::path::Path;
 
 /// Video decoder with static FFmpeg support for frame extraction
 pub struct VideoDecoder {
-    /// Enable hardware-accelerated decoding (VideoToolbox on macOS)
-    hardware_acceleration: bool,
+    _private: (), // Force construction through new()
 }
 
 impl VideoDecoder {
-    /// Create a new video decoder with hardware acceleration enabled by default
+    /// Create a new video decoder
     pub fn new() -> Result<Self> {
         // Initialize FFmpeg
         ffmpeg_next::init()
             .map_err(|e| MemvidError::Video(format!("FFmpeg init failed: {}", e)))?;
 
-        Ok(Self {
-            hardware_acceleration: true,
-        })
+        Ok(Self { _private: () })
     }
 
-    /// Create a video decoder context, preferring hardware acceleration when available.
-    /// On macOS, tries `hevc_videotoolbox` first for M-series media engine decoding,
-    /// falling back to software HEVC decoder if unavailable.
+    /// Create a codec-agnostic video decoder context from stream parameters.
+    /// FFmpeg auto-detects the codec (ProRes, HEVC, etc.) and activates
+    /// hardware acceleration (VideoToolbox on macOS) automatically when available.
     fn create_decoder(
         &self,
         stream_parameters: ffmpeg_next::codec::Parameters,
     ) -> Result<ffmpeg_next::decoder::Video> {
-        if self.hardware_acceleration {
-            if let Some(hw_codec) = ffmpeg_next::decoder::find_by_name("hevc_videotoolbox") {
-                let mut ctx =
-                    ffmpeg_next::codec::context::Context::new_with_codec(hw_codec);
-                if let Ok(()) = ctx.set_parameters(stream_parameters.clone()) {
-                    // Set color range to MPEG (limited) to suppress VideoToolbox
-                    // "Color range not set for nv12" warning
-                    unsafe {
-                        (*ctx.as_mut_ptr()).color_range =
-                            ffmpeg_next::ffi::AVColorRange::AVCOL_RANGE_MPEG;
-                    }
-                    match ctx.decoder().video() {
-                        Ok(decoder) => {
-                            log::info!("Using hevc_videotoolbox hardware decoder");
-                            return Ok(decoder);
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "Hardware decoder failed, falling back to software: {}",
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        // Fallback to auto-detected decoder from stream parameters
         let ctx = ffmpeg_next::codec::context::Context::from_parameters(stream_parameters)
             .map_err(|e| {
                 MemvidError::Video(format!("Failed to create decoder context: {}", e))
@@ -66,7 +35,7 @@ impl VideoDecoder {
         let decoder = ctx.decoder().video().map_err(|e| {
             MemvidError::Video(format!("Failed to create video decoder: {}", e))
         })?;
-        log::debug!("Using software HEVC decoder");
+        log::info!("Using {} decoder", decoder.codec().map_or("unknown".to_string(), |c| c.name().to_string()));
         Ok(decoder)
     }
 
@@ -340,6 +309,9 @@ impl VideoDecoder {
             0
         };
 
+        let codec_name = decoder.codec()
+            .map_or("unknown".to_string(), |c| c.name().to_string());
+
         Ok(VideoInfo {
             width: decoder.width(),
             height: decoder.height(),
@@ -347,7 +319,7 @@ impl VideoDecoder {
             duration_seconds,
             frame_count,
             format: format!("{:?}", decoder.format()),
-            codec: "H.264".to_string(), // Default for memvid videos
+            codec: codec_name,
         })
     }
 
@@ -590,9 +562,7 @@ impl VideoDecoder {
 
 impl Default for VideoDecoder {
     fn default() -> Self {
-        Self::new().unwrap_or(Self {
-            hardware_acceleration: true,
-        })
+        Self::new().unwrap_or(Self { _private: () })
     }
 }
 

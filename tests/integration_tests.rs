@@ -114,7 +114,9 @@ async fn test_retriever_functionality() -> Result<(), Box<dyn std::error::Error>
 
 #[test]
 fn test_qr_functionality() -> Result<(), Box<dyn std::error::Error>> {
-    let encoder = QrEncoder::new(QrConfig::default());
+    let mut qr_config = QrConfig::default();
+    qr_config.box_size = 4; // rqrr needs >1px per module to detect finder patterns
+    let encoder = QrEncoder::new(qr_config);
     let decoder = QrDecoder::new();
 
     // Test basic encode/decode (equivalent to Python test_qr_encode_decode)

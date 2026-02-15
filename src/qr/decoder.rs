@@ -223,6 +223,7 @@ mod tests {
     #[test]
     fn test_compressed_decode() {
         let mut config = QrConfig::default();
+        config.box_size = 4; // rqrr needs >1px per module to detect finder patterns
         config.compression_threshold = 5; // Force compression
         config.enable_compression = true;
 
@@ -284,7 +285,9 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip() {
-        let encoder = QrEncoder::default();
+        let mut config = QrConfig::default();
+        config.box_size = 4; // rqrr needs >1px per module to detect finder patterns
+        let encoder = QrEncoder::new(config);
         let decoder = QrDecoder::new();
 
         let original_texts = vec![

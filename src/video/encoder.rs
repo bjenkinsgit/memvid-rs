@@ -1,7 +1,7 @@
 //! Video encoding functionality for memvid-rs
 //!
-//! This module provides video encoding using static FFmpeg with H.265 codec
-//! optimized for QR code preservation using exact Python parameters.
+//! This module provides video encoding using static FFmpeg with ProRes codec
+//! optimized for QR code preservation — intra-frame only, no deblocking artifacts.
 
 use crate::config::VideoConfig;
 use crate::error::{MemvidError, Result};
@@ -53,20 +53,21 @@ impl VideoEncoder {
         ffmpeg_next::init()
             .map_err(|e| MemvidError::Video(format!("FFmpeg init failed: {}", e)))?;
 
-        // Create output format context
-        let mut output_ctx = ffmpeg_next::format::output(&output_path)
+        // Create output format context — force MOV muxer for ProRes compatibility
+        // (the mp4 muxer doesn't support ProRes; MOV does and is file-extension-agnostic)
+        let mut output_ctx = ffmpeg_next::format::output_as(&output_path, "mov")
             .map_err(|e| MemvidError::Video(format!("Failed to create output context: {}", e)))?;
 
-        // Find H.265 encoder (HEVC), trying hardware encoder first on macOS
+        // Find ProRes encoder, trying hardware encoder first on macOS
         let codec = if self.config.hardware_acceleration {
-            ffmpeg_next::encoder::find_by_name("hevc_videotoolbox")
-                .or_else(|| ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::HEVC))
+            ffmpeg_next::encoder::find_by_name("prores_videotoolbox")
+                .or_else(|| ffmpeg_next::encoder::find_by_name("prores_ks"))
         } else {
-            ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::HEVC)
+            ffmpeg_next::encoder::find_by_name("prores_ks")
         }
-        .ok_or_else(|| MemvidError::Video("H.265 (HEVC) encoder not found".to_string()))?;
+        .ok_or_else(|| MemvidError::Video("ProRes encoder not found".to_string()))?;
 
-        let using_videotoolbox = codec.name() == "hevc_videotoolbox";
+        let using_videotoolbox = codec.name() == "prores_videotoolbox";
         log::info!("Using {} encoder for video", codec.name());
 
         // Create video stream
@@ -82,11 +83,11 @@ impl VideoEncoder {
             .map_err(|e| MemvidError::Video(format!("Failed to create video encoder: {}", e)))?;
 
         // Set encoder parameters - use config dimensions, not QR size
-        // VideoToolbox prefers NV12 (bi-planar 4:2:0) as its hardware fast path
+        // ProRes VideoToolbox accepts NV12; software prores_ks uses YUV422P10LE
         let pixel_format = if using_videotoolbox {
             ffmpeg_next::format::Pixel::NV12
         } else {
-            ffmpeg_next::format::Pixel::YUV420P
+            ffmpeg_next::format::Pixel::YUV422P10LE
         };
 
         encoder.set_width(self.config.frame_width);
@@ -103,17 +104,15 @@ impl VideoEncoder {
         let mut dictionary = ffmpeg_next::Dictionary::new();
 
         if using_videotoolbox {
-            // VideoToolbox hardware encoder — use bitrate control, not x265 CRF/preset
-            encoder.set_bit_rate(8_000_000); // 8 Mbps — high quality for QR fidelity at 256x256
+            // ProRes VideoToolbox — profile selection via dictionary
             encoder.set_color_range(ffmpeg_next::color::Range::MPEG); // suppress "Color range not set for nv12" warning
+            let profile_str = self.config.prores_profile_value().to_string();
+            dictionary.set("profile", &profile_str);
             dictionary.set("allow_sw", "0"); // hardware only
-            dictionary.set("realtime", "0"); // quality over speed
-            dictionary.set("profile", "main");
         } else {
-            // Software x265 params from config (matches Python H265_PARAMETERS)
-            for (key, value) in &self.config.quality_params {
-                dictionary.set(key, value);
-            }
+            // Software prores_ks — profile selection via dictionary
+            let profile_str = self.config.prores_profile_value().to_string();
+            dictionary.set("profile", &profile_str);
         }
 
         // Open encoder
@@ -284,7 +283,7 @@ impl VideoEncoder {
 
     /// Get supported output formats
     pub fn supported_formats() -> Vec<String> {
-        // Common video formats supported by H.264
+        // Common video formats supported by ProRes
         vec![
             "mp4".to_string(),
             "mkv".to_string(),
@@ -303,20 +302,20 @@ mod tests {
     #[tokio::test]
     async fn test_encoder_creation() {
         let encoder = VideoEncoder::default();
-        assert_eq!(encoder.config.fps, 30.0); // Updated default FPS
-        assert_eq!(encoder.config.frame_width, 256); // QR upscaling target
-        assert_eq!(encoder.config.frame_height, 256); // QR upscaling target
+        assert_eq!(encoder.config.fps, 30.0);
+        assert_eq!(encoder.config.frame_width, 185);
+        assert_eq!(encoder.config.frame_height, 185);
     }
 
     #[tokio::test]
     async fn test_video_config() {
         let config = VideoConfig::default();
         assert_eq!(config.fps, 30.0);
-        assert_eq!(config.frame_width, 256);
-        assert_eq!(config.frame_height, 256);
-        assert_eq!(config.codec, "libx265");
-        assert!(config.quality_params.contains_key("crf"));
-        assert!(config.quality_params.contains_key("preset"));
+        assert_eq!(config.frame_width, 185);
+        assert_eq!(config.frame_height, 185);
+        assert_eq!(config.codec, "prores_ks");
+        assert_eq!(config.prores_profile, "proxy");
+        assert!(config.quality_params.contains_key("profile"));
     }
 
     #[tokio::test]

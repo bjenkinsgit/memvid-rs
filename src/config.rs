@@ -107,7 +107,12 @@ pub struct VideoConfig {
     /// Enable hardware acceleration
     pub hardware_acceleration: bool,
 
+    /// ProRes profile: proxy, lt, standard, hq, 4444, xq
+    #[serde(default = "default_prores_profile")]
+    pub prores_profile: String,
+
     /// x265 encoder log level: none, error, warning, info, debug, full
+    /// Kept for backwards compatibility with existing TOML configs
     #[serde(default = "default_x265_log_level")]
     pub x265_log_level: String,
 
@@ -123,6 +128,10 @@ pub struct VideoConfig {
     /// Hide FFmpeg CLI banner
     #[serde(default = "default_ffmpeg_hide_banner")]
     pub ffmpeg_hide_banner: bool,
+}
+
+fn default_prores_profile() -> String {
+    "proxy".to_string()
 }
 
 fn default_x265_log_level() -> String {
@@ -277,7 +286,7 @@ impl Default for QrConfig {
         Self {
             version: None, // Auto-detect
             error_correction: ErrorCorrectionLevel::High,
-            box_size: 10,
+            box_size: 1, // 1:1 pixel-per-module — ProRes preserves sharp edges
             border: 4,
             fill_color: "black".to_string(),
             back_color: "white".to_string(),
@@ -290,26 +299,18 @@ impl Default for QrConfig {
 impl Default for VideoConfig {
     fn default() -> Self {
         let mut quality_params = HashMap::new();
-        // H.265 parameters for QR code preservation
-        quality_params.insert("crf".to_string(), "18".to_string()); // High quality — minimal size impact at 256x256
-        quality_params.insert("preset".to_string(), "slower".to_string());
-        // No tune — zerolatency hurts compression and has no benefit for offline encoding
-        quality_params.insert("profile".to_string(), "main".to_string());
-        quality_params.insert("pix_fmt".to_string(), "yuv420p".to_string());
-
-        let x265_log_level = default_x265_log_level();
-        // x265 log level - can be overridden via x265_log_level field
-        // Options: none, error, warning, info, debug, full
-        quality_params.insert("x265-params".to_string(), format!("log-level={}", x265_log_level));
+        // ProRes profile for lossless QR code preservation
+        quality_params.insert("profile".to_string(), "proxy".to_string());
 
         Self {
-            codec: "libx265".to_string(), // H.265 exactly like Python
-            fps: 30.0,                    // Python: video_fps: 30
-            frame_width: 256,             // Python: frame_width: 256
-            frame_height: 256,            // Python: frame_height: 256
+            codec: "prores_ks".to_string(), // ProRes — intra-frame, no deblocking artifacts
+            fps: 30.0,
+            frame_width: 185,  // Native QR v40 at box_size=1 (177 modules + 2*4 border)
+            frame_height: 185,
             quality_params,
             hardware_acceleration: true,
-            x265_log_level,
+            prores_profile: default_prores_profile(),
+            x265_log_level: default_x265_log_level(),
             ffmpeg_cli_log_level: default_ffmpeg_cli_log_level(),
             library_log_level: default_ffmpeg_library_log_level(),
             ffmpeg_hide_banner: default_ffmpeg_hide_banner(),
@@ -318,12 +319,27 @@ impl Default for VideoConfig {
 }
 
 impl VideoConfig {
-    /// Update x265 log level in quality_params (call after changing x265_log_level)
+    /// Update x265 log level in quality_params (call after changing x265_log_level).
+    /// Only relevant for legacy H.265 configs; ProRes ignores this.
     pub fn apply_x265_log_level(&mut self) {
         self.quality_params.insert(
             "x265-params".to_string(),
             format!("log-level={}", self.x265_log_level)
         );
+    }
+
+    /// Map ProRes profile name to numeric value for FFmpeg.
+    /// proxy=0, lt=1, standard=2, hq=3, 4444=4, xq=5
+    pub fn prores_profile_value(&self) -> i32 {
+        match self.prores_profile.to_lowercase().as_str() {
+            "proxy" => 0,
+            "lt" => 1,
+            "standard" => 2,
+            "hq" => 3,
+            "4444" => 4,
+            "xq" => 5,
+            _ => 0, // Default to proxy
+        }
     }
 
     /// Apply the library_log_level setting to ffmpeg-next's global log level.
@@ -422,8 +438,12 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.chunking.chunk_size, 1024);
-        assert_eq!(config.qr.box_size, 10);
+        assert_eq!(config.qr.box_size, 1);
         assert_eq!(config.video.fps, 30.0);
+        assert_eq!(config.video.codec, "prores_ks");
+        assert_eq!(config.video.frame_width, 185);
+        assert_eq!(config.video.frame_height, 185);
+        assert_eq!(config.video.prores_profile, "proxy");
         assert_eq!(
             config.ml.model_name,
             "sentence-transformers/all-MiniLM-L6-v2"

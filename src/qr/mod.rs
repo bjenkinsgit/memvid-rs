@@ -15,10 +15,18 @@ mod python_equivalent_tests {
     use super::*;
     use crate::config::QrConfig;
 
+    /// QR config with box_size=4 for reliable rqrr decoding in tests.
+    /// (Default box_size=1 is optimized for 1:1 ProRes video frames, not raw decode.)
+    fn test_qr_config() -> QrConfig {
+        let mut config = QrConfig::default();
+        config.box_size = 4;
+        config
+    }
+
     #[test]
     fn test_python_equivalent_qr_encode_decode() {
         // Equivalent to Python test_qr_encode_decode
-        let encoder = QrEncoder::new(QrConfig::default());
+        let encoder = QrEncoder::new(test_qr_config());
         let decoder = QrDecoder::new();
 
         let test_data = "Test data for QR encoding and decoding round trip";
@@ -36,7 +44,7 @@ mod python_equivalent_tests {
     #[test]
     fn test_python_equivalent_qr_round_trip_various_sizes() {
         // Test with various data sizes like Python version
-        let encoder = QrEncoder::new(QrConfig::default());
+        let encoder = QrEncoder::new(test_qr_config());
         let decoder = QrDecoder::new();
 
         let test_cases = vec![
@@ -60,7 +68,7 @@ mod python_equivalent_tests {
     #[test]
     fn test_python_equivalent_qr_unicode_data() {
         // Test with Unicode data
-        let encoder = QrEncoder::new(QrConfig::default());
+        let encoder = QrEncoder::new(test_qr_config());
         let decoder = QrDecoder::new();
 
         let unicode_data = "Hello 世界! 🚀 Testing Unicode: åäö, éèê, ñ, ü";
@@ -78,7 +86,7 @@ mod python_equivalent_tests {
     #[test]
     fn test_python_equivalent_qr_json_data() {
         // Test with JSON data like Python might
-        let encoder = QrEncoder::new(QrConfig::default());
+        let encoder = QrEncoder::new(test_qr_config());
         let decoder = QrDecoder::new();
 
         let json_data =
