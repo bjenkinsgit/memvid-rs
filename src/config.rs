@@ -286,7 +286,7 @@ impl Default for QrConfig {
         Self {
             version: None, // Auto-detect
             error_correction: ErrorCorrectionLevel::High,
-            box_size: 1, // 1:1 pixel-per-module — ProRes preserves sharp edges
+            box_size: 2, // 2px per module — minimum for reliable rqrr detection
             border: 4,
             fill_color: "black".to_string(),
             back_color: "white".to_string(),
@@ -305,8 +305,8 @@ impl Default for VideoConfig {
         Self {
             codec: "prores_ks".to_string(), // ProRes — intra-frame, no deblocking artifacts
             fps: 30.0,
-            frame_width: 185,  // Native QR v40 at box_size=1 (177 modules + 2*4 border)
-            frame_height: 185,
+            frame_width: 370,  // Native QR v40 at box_size=2 (185 modules * 2)
+            frame_height: 370,
             quality_params,
             hardware_acceleration: true,
             prores_profile: default_prores_profile(),
@@ -438,11 +438,11 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.chunking.chunk_size, 1024);
-        assert_eq!(config.qr.box_size, 1);
+        assert_eq!(config.qr.box_size, 2);
         assert_eq!(config.video.fps, 30.0);
         assert_eq!(config.video.codec, "prores_ks");
-        assert_eq!(config.video.frame_width, 185);
-        assert_eq!(config.video.frame_height, 185);
+        assert_eq!(config.video.frame_width, 370);
+        assert_eq!(config.video.frame_height, 370);
         assert_eq!(config.video.prores_profile, "proxy");
         assert_eq!(
             config.ml.model_name,

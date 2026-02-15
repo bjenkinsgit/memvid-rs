@@ -303,16 +303,16 @@ mod tests {
     async fn test_encoder_creation() {
         let encoder = VideoEncoder::default();
         assert_eq!(encoder.config.fps, 30.0);
-        assert_eq!(encoder.config.frame_width, 185);
-        assert_eq!(encoder.config.frame_height, 185);
+        assert_eq!(encoder.config.frame_width, 370);
+        assert_eq!(encoder.config.frame_height, 370);
     }
 
     #[tokio::test]
     async fn test_video_config() {
         let config = VideoConfig::default();
         assert_eq!(config.fps, 30.0);
-        assert_eq!(config.frame_width, 185);
-        assert_eq!(config.frame_height, 185);
+        assert_eq!(config.frame_width, 370);
+        assert_eq!(config.frame_height, 370);
         assert_eq!(config.codec, "prores_ks");
         assert_eq!(config.prores_profile, "proxy");
         assert!(config.quality_params.contains_key("profile"));
