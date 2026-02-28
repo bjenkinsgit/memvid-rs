@@ -52,6 +52,7 @@ pub use config::Config;
 pub use error::{MemvidError, Result};
 
 // Re-export commonly used types
+pub use ml::embedding::Embedding;
 pub use storage::EncodingStats;
 pub use text::ChunkMetadata;
 

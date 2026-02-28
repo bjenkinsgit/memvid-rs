@@ -142,11 +142,14 @@ impl MemvidRetriever {
         let embedding_config = EmbeddingConfig::from_ml_config(&config.ml);
         let embedding_model = EmbeddingModel::new(embedding_config).await?;
 
+        let model_display = config.ml.embedding_api_model.as_deref()
+            .filter(|_| config.ml.embedding_api_url.is_some())
+            .unwrap_or(&config.ml.model_name);
         log::info!(
             "MemvidRetriever initialized for {} with database {} (model: {})",
             video_path,
             database_path,
-            config.ml.model_name,
+            model_display,
         );
 
         Ok(Self {
@@ -249,6 +252,82 @@ impl MemvidRetriever {
             results.len(),
             query
         );
+
+        Ok(results)
+    }
+
+    /// Encode a query string into an embedding vector.
+    ///
+    /// Useful when you want to embed once and search multiple retrievers
+    /// via [`search_by_embedding`] without re-computing the embedding.
+    pub fn encode_query(&mut self, query: &str) -> Result<Vec<f32>> {
+        self.embedding_model.encode_query(query)
+    }
+
+    /// Search using a pre-computed query embedding, skipping the encode step.
+    ///
+    /// This is identical to [`search`] but accepts an already-encoded embedding
+    /// vector instead of a query string. Use this when searching multiple
+    /// retrievers with the same query to avoid redundant embedding API calls.
+    pub async fn search_by_embedding(
+        &mut self,
+        query_embedding: &[f32],
+        top_k: usize,
+    ) -> Result<Vec<(f32, String)>> {
+        log::info!("Searching by pre-computed embedding (top {})", top_k);
+
+        // If we have an index manager, use semantic search
+        if let Some(ref index_manager) = self.index_manager {
+            let embedding_vec = query_embedding.to_vec();
+            let search_results = index_manager.search(&embedding_vec, top_k)?;
+            let mut results = Vec::new();
+
+            for result in search_results {
+                if let Some(chunk) = index_manager.get_chunk_by_id(result.id) {
+                    let score = 1.0 - result.distance;
+                    results.push((score, chunk.text.clone()));
+                }
+            }
+
+            return Ok(results);
+        }
+
+        // Check if chunks have stored embeddings for true semantic search
+        let all_chunks = self.database.search_chunks("", top_k * 10)?;
+        let chunks_with_embeddings: Vec<_> = all_chunks
+            .iter()
+            .filter(|chunk| chunk.embedding.is_some())
+            .collect();
+
+        if chunks_with_embeddings.is_empty() {
+            return Err(crate::error::MemvidError::MachineLearning(
+                "No semantic embeddings available in database. Refusing keyword fallback to avoid misleading results. Please re-encode video with embeddings enabled.".to_string()
+            ));
+        }
+
+        // Get all chunks with embeddings for semantic comparison
+        let chunks_with_embeddings = self.database.search_chunks("", top_k * 50)?;
+        let valid_chunks: Vec<_> = chunks_with_embeddings
+            .into_iter()
+            .filter(|chunk| chunk.embedding.is_some())
+            .collect();
+
+        if valid_chunks.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut results = Vec::new();
+
+        for chunk in valid_chunks {
+            if let Some(ref chunk_embedding) = chunk.embedding {
+                let similarity = self.compute_cosine_similarity(query_embedding, chunk_embedding);
+                results.push((similarity, chunk.text));
+            }
+        }
+
+        // Sort by similarity score (descending) and take top_k
+        results.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+        results.truncate(top_k);
 
         Ok(results)
     }
