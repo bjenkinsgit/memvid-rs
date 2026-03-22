@@ -627,10 +627,11 @@ impl MemvidEncoder {
         // Force MOV muxer for ProRes compatibility (mp4 muxer doesn't support ProRes)
         args.extend(["-f", "concat", "-safe", "0", "-i", &concat_list_file, "-c", "copy", "-f", "mov", "-y", output]);
 
-        let output_status = std::process::Command::new("ffmpeg")
+        let ffmpeg_bin = self.config.video.ffmpeg_path.as_deref().unwrap_or("ffmpeg");
+        let output_status = std::process::Command::new(ffmpeg_bin)
             .args(&args)
             .status()
-            .map_err(|e| MemvidError::Video(format!("Failed to execute ffmpeg: {}", e)))?;
+            .map_err(|e| MemvidError::Video(format!("Failed to execute ffmpeg ({}): {}", ffmpeg_bin, e)))?;
 
         // Cleanup
         let _ = std::fs::remove_file(&concat_list_file);

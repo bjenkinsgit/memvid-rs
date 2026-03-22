@@ -128,6 +128,11 @@ pub struct VideoConfig {
     /// Hide FFmpeg CLI banner
     #[serde(default = "default_ffmpeg_hide_banner")]
     pub ffmpeg_hide_banner: bool,
+
+    /// Path to the ffmpeg CLI binary. Defaults to "ffmpeg" (resolved via PATH).
+    /// Set this to bundle ffmpeg inside an app (e.g. "/path/to/Contents/Resources/ffmpeg").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ffmpeg_path: Option<String>,
 }
 
 fn default_prores_profile() -> String {
@@ -314,6 +319,7 @@ impl Default for VideoConfig {
             ffmpeg_cli_log_level: default_ffmpeg_cli_log_level(),
             library_log_level: default_ffmpeg_library_log_level(),
             ffmpeg_hide_banner: default_ffmpeg_hide_banner(),
+            ffmpeg_path: None,
         }
     }
 }
