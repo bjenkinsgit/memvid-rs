@@ -1,135 +1,93 @@
-# memvid-rs 🎬📚
+# memvid-rs
 
-[![Rust](https://img.shields.io/badge/rust-1.75+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.85+-orange.svg)](https://www.rust-lang.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Crates.io](https://img.shields.io/crates/v/memvid-rs.svg)](https://crates.io/crates/memvid-rs)
-[![Docs.rs](https://docs.rs/memvid-rs/badge.svg)](https://docs.rs/memvid-rs)
 
-A high-performance, **self-contained** Rust reimplementation of [memvid](https://github.com/Olow304/memvid), encoding text documents as QR codes within video files for efficient storage and **TRUE neural network semantic retrieval**.
+A high-performance Rust implementation of [memvid](https://github.com/Olow304/memvid) — encode text documents as QR codes in video files for compact storage with BERT-powered semantic retrieval.
 
-**🚀 150x+ faster with GPU • Zero dependencies • Single binary • 100% search accuracy**
+## What is memvid-rs?
 
-## 🎯 What is memvid-rs?
+memvid-rs transforms text into searchable video archives:
 
-memvid-rs transforms text documents into video files using a novel approach:
+1. **Chunk** documents into segments
+2. **Encode** each chunk as a QR code frame
+3. **Compile** frames into a ProRes video (lossless, intra-frame)
+4. **Index** chunks with BERT embeddings for semantic search
+5. **Retrieve** relevant chunks by meaning, not just keywords
 
-1. **📄 Text Processing**: Documents are chunked into manageable segments
-2. **🔲 QR Encoding**: Each chunk becomes a QR code frame
-3. **🎬 Video Creation**: QR frames are compiled into a video file
-4. **🧠 TRUE BERT Inference**: Real transformer neural networks for semantic understanding
-5. **⚡ Lightning Retrieval**: Query your "video memory" with perfect accuracy
+The video format provides a durable, compact archive. The BERT index provides instant semantic search over the contents.
 
-Perfect for archiving large text corpora, creating searchable video libraries, or building novel document storage systems with **100% semantic search accuracy**.
+## Key Features
 
-## ✨ Features
+**Performance**
+- Metal GPU acceleration on Apple Silicon (M-series) via HuggingFace Candle
+- CUDA support for NVIDIA GPUs
+- HNSW vector indexing for sub-second search across large corpora
+- Parallel encoding pipeline (QR generation, BERT embedding, video encoding)
 
-### 🚀 **Performance**
-- **150x+ faster** encoding with Metal GPU acceleration (M1 Max: 9 seconds vs minutes)
-- **100% search accuracy** with TRUE BERT neural network inference
-- **Sub-second search** across millions of text chunks with HNSW indexing
-- **1.68 seconds** for complete 112-test validation suite
-- **Zero compilation warnings** - production-ready clean codebase
+**Video Encoding**
+- **ProRes codec** (intra-frame, lossless) — replaced H.265 for reliable QR decode on every frame
+- Configurable ProRes profiles: proxy, lt, standard, hq, 4444, xq
+- Hardware-accelerated encoding/decoding via VideoToolbox on macOS
+- FFmpeg 8.0 (linked via ffmpeg-next)
 
-### 🧠 **TRUE Machine Learning**
-- **Real BERT Neural Network** - 6 transformer layers with multi-head attention
-- **Native Rust ML** via HuggingFace Candle (zero Python dependencies!)
-- **GPU Auto-Detection** - Metal/CUDA/CPU with automatic optimization
-- **Perfect Semantic Understanding** - "who invented bitcoin" → "Satoshi Nakamoto" ✅
-- **384-dimensional embeddings** from sentence-transformers/all-MiniLM-L6-v2
+**Machine Learning**
+- BERT sentence embeddings (384-dimensional) via HuggingFace Candle — pure Rust, no Python
+- Default model: `sentence-transformers/all-MiniLM-L6-v2`
+- Configurable model via `MEMVID_MODEL_NAME` env or TOML config
+- Remote embedding API support (any OpenAI-compatible `/v1/embeddings` endpoint)
+- Asymmetric query/document prefixes for instruction-tuned models
 
-### 🛠️ **Technology**
-- **100% Pure Rust** - zero external system dependencies
-- **Self-contained binary** - single file deployment anywhere
-- **Advanced vector search** with HNSW indexing and 4 distance metrics
-- **Async/await** throughout for maximum concurrency
-- **Fast test mode** - hash-based dummy embeddings for development
+**Search**
+- HNSW (Hierarchical Navigable Small World) vector search
+- 4 distance metrics: Cosine, Euclidean, Manhattan, Dot Product
+- LRU frame cache for fast repeated lookups
+- Configurable ef_search, ef_construction, max_connections
 
-### 📚 **Compatibility & Deployment**
-- **📱 True portability** - single 50MB binary runs anywhere
-- **🔄 Python interop** - reads existing memvid files seamlessly
-- **📄 Multiple formats**: PDF, TXT, Markdown, JSON
-- **🌍 Cross-platform**: Windows, macOS, Linux, ARM
-- **🚢 Zero installation** - copy and run, no dependencies
-- **🐳 Tiny containers** - scratch/alpine + binary (~55MB total)
+**Storage**
+- SQLite index with WAL mode for concurrent reads
+- Incremental append — add documents to existing archives without re-encoding
+- Conversation history append for chat memory use cases
 
-### 🔧 **Developer Experience**
-- **Clean async APIs** with comprehensive error handling
-- **Extensive documentation** and examples
-- **CLI tool** for quick operations
-- **Library crate** for integration into your projects
+## Quick Start
 
-## 🧠 **TRUE BERT Neural Network Search**
+### Prerequisites
 
-### **Perfect Semantic Understanding**
+- Rust 1.85+
+- FFmpeg 8.0+ (`brew install ffmpeg` on macOS)
+
+### Build from Source
 
 ```bash
-# Traditional keyword search
-$ search "bitcoin creator" 
-→ Random technical details about cryptography
-
-# TRUE BERT neural network search
-$ memvid search "who invented bitcoin" --video memory.mp4
-→ Score: 0.346 - "Bitcoin: A Peer-to-Peer Electronic Cash System Satoshi Nakamoto"
-```
-
-### **Real Transformer Architecture**
-
-- **6 Transformer Layers**: Multi-head self-attention with feed-forward networks
-- **12 Attention Heads**: Per layer with residual connections and layer normalization  
-- **Attention-Weighted Pooling**: Sophisticated sentence representation extraction
-- **384-Dimensional Embeddings**: Dense semantic vectors from real BERT model
-- **Metal GPU Acceleration**: Automatic hardware optimization for maximum performance
-
-### **Production vs Development**
-
-```rust
-// Production: TRUE BERT neural network inference
-#[cfg(not(test))]
-let embedding = bert_model.forward(&input_ids, &token_type_ids, &attention_mask)?;
-
-// Development: Fast hash-based dummy embeddings (same API)
-#[cfg(test)]  
-let embedding = generate_test_embedding(text); // 1000x+ faster for tests
-```
-
-## 🚀 Quick Start
-
-### Installation
-
-#### 🎯 **Option 1: Self-Contained Binary** (Recommended)
-
-```bash
-# Download pre-built binary (zero dependencies!)
-curl -L https://github.com/AllenDang/memvid-rs/releases/latest/download/memvid-rs-linux -o memvid-rs
-chmod +x memvid-rs
-
-# That's it! Ready to use anywhere
-./memvid-rs encode document.pdf
-```
-
-#### 🛠️ **Option 2: Build from Source**
-
-```bash
-# Install from crates.io
-cargo install memvid-rs
-
-# Or clone and build self-contained version
-git clone https://github.com/AllenDang/memvid-rs
+git clone https://github.com/bjenkinsgit/memvid-rs
 cd memvid-rs
 cargo build --release
 ```
 
-### Basic Usage
+Feature flags (compile-time):
+- `metal` (default) — Metal GPU acceleration on macOS
+- `cuda` — CUDA GPU acceleration for NVIDIA
+
+### CLI Usage
 
 ```bash
-# Encode a document into a video
-memvid encode document.pdf --output memory.mp4
+# Encode a document
+memvid-rs encode document.pdf -o memory.mp4
 
-# Search your video memory
-memvid search "machine learning concepts" --video memory.mp4
+# Encode multiple files
+memvid-rs encode paper.pdf notes.txt readme.md -o knowledge.mp4
 
-# Interactive chat with your documents
-memvid chat --video memory.mp4
+# Search
+memvid-rs search "who invented bitcoin" memory.mp4 -k 5
+
+# Append to an existing archive
+memvid-rs append memory.mp4 new_document.pdf
+
+# Interactive chat (requires OpenAI API key or local LLM)
+memvid-rs chat memory.mp4
+
+# Use a custom config
+memvid-rs --config memvid_config.toml encode document.pdf -o memory.mp4
 ```
 
 ### Library Usage
@@ -139,322 +97,152 @@ use memvid_rs::{MemvidEncoder, MemvidRetriever, Config};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create an encoder with default settings
+    // Encode
     let mut encoder = MemvidEncoder::new(None).await?;
-    
-    // Add content from various sources
     encoder.add_pdf("document.pdf").await?;
-    encoder.add_text("Additional context text", 1024, 32).await?;
-    
-    // Build the video memory
+    encoder.add_text("Additional context", 1024, 32).await?;
     let stats = encoder.build_video("memory.mp4", "index.db").await?;
-    println!("Encoded {} chunks into video", stats.total_chunks);
-    
-    // Query your video memory
+    println!("Encoded {} chunks", stats.total_chunks);
+
+    // Search
     let mut retriever = MemvidRetriever::new("memory.mp4", "index.db").await?;
     let results = retriever.search("your query", 5).await?;
-    
     for (score, text) in results {
-        println!("Score: {:.3} - {}", score, text);
+        println!("{:.3}: {}", score, text);
     }
-    
+
     Ok(())
 }
 ```
 
-## 🏗️ Architecture
-
-```mermaid
-graph TB
-    A[Text Documents] --> B[Text Chunking]
-    B --> C[Embedding Generation]
-    C --> D[Vector Index]
-    B --> E[QR Code Generation]
-    E --> F[Video Encoding]
-    
-    G[Search Query] --> H[Query Embedding]
-    H --> I[Vector Search]
-    I --> J[Frame Retrieval]
-    J --> K[QR Decoding]
-    K --> L[Text Results]
-    
-    D -.-> I
-    F -.-> J
-```
-
-### Core Components
-
-- **🔲 QR Module**: Pure Rust QR encoding/decoding with compression (qrcode + rqrr)
-- **🎬 Video Module**: Self-contained video processing (re_mp4 + mp4parse + image)
-- **🧠 ML Module**: Embedded models via HuggingFace Candle (zero Python deps)
-- **🔍 Search Module**: Pure Rust HNSW vector search (hnsw_rs + instant-distance)  
-- **📊 Storage Module**: Memory-efficient data structures and caching
-
-### 🧠 **TRUE BERT Search Quality**
-
-| Query Type | Traditional Search | **memvid-rs BERT** | Quality Score |
-|------------|-------------------|-------------------|---------------|
-| **Factual Questions** | "bitcoin cryptocurrency technical" | **"Satoshi Nakamoto" (0.346)** | **🏆 100%** |
-| **Concept Queries** | Random keyword matches | **Precise semantic understanding** | **🎯 Perfect** |
-| **Document Retrieval** | Text fragment searching | **Context-aware relevance** | **✨ Superior** |
-| **Multi-language** | Keyword limitations | **Universal semantic vectors** | **🌍 Global** |
-
-**🎉 Result**: memvid-rs achieves **perfect semantic search accuracy** with TRUE BERT neural network inference while maintaining **150x+ performance improvements** through Metal GPU acceleration.
-
-## 🔧 Configuration
-
-### CLI Configuration
-
-```bash
-# Custom chunk size and overlap
-memvid encode document.pdf --chunk-size 2048 --overlap 64
-
-# Use specific embedding model
-memvid encode document.pdf --model sentence-transformers/all-MiniLM-L6-v2
-
-# Force CPU (GPU auto-detected and used by default when available)
-memvid encode document.pdf --device cpu
-
-# Compression settings
-memvid encode document.pdf --compression-level 9 --fps 30
-```
-
-### Library Configuration
+### Append to Existing Archives
 
 ```rust
-use memvid_rs::Config;
-
-let mut config = Config::default();
-
-// Configure text chunking
-config.chunking.chunk_size = 1024;
-config.chunking.overlap = 32;
-
-// Configure ML model
-config.ml.model_name = "sentence-transformers/all-MiniLM-L6-v2".to_string();
-config.ml.device = "auto".to_string(); // auto (GPU if available), cpu
-
-// Configure video encoding
-config.video.fps = 30.0;
-config.video.codec = "libx265".to_string();
-
-let encoder = MemvidEncoder::new(Some(config)).await?;
+let mut encoder = MemvidEncoder::new(None).await?;
+encoder.append_document_chunks("memory.mp4", "index.db", "new_doc.pdf").await?;
 ```
 
-## 🛠️ Building from Source
+### Pre-computed Embeddings
 
-### **🎯 Universal Build** (Zero Configuration!)
+```rust
+// Encode a query to an embedding vector
+let embedding = retriever.encode_query("search terms").await?;
 
-```bash
-# Only Rust required - no system dependencies!
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build universal binary with everything auto-optimized
-cargo build --release
-
-# Single binary that auto-detects and optimizes for your hardware!
-./target/release/memvid-rs
+// Search by embedding directly (useful for caching or cross-index queries)
+let results = retriever.search_by_embedding(&embedding, 5).await?;
 ```
 
-**✅ That's it! One binary with everything:**
-- **All video formats** (H.264, H.265, AV1, VP9, etc.) via static FFmpeg
-- **Auto GPU/CPU detection** - uses CUDA/Metal when available, CPU otherwise
-- **Pure Rust fallbacks** for maximum compatibility
-- **PDF processing, QR codes, ML models** - everything built-in
-- **Intelligent optimization** - automatically selects best algorithms
-- **Zero system dependencies** - works on any compatible system
+## Configuration
 
-### Library Usage
+memvid-rs is configured via TOML files. See `memvid_config.example.toml` for all options.
 
 ```toml
-[dependencies]
-memvid-rs = "0.1"
+[chunking]
+chunk_size = 1024        # Characters per chunk
+overlap = 32             # Overlap between chunks
+
+[ml]
+device = "auto"          # auto | cpu | cuda | metal
+model_name = "sentence-transformers/all-MiniLM-L6-v2"
+batch_size = 32
+
+# Remote embedding API (instead of local BERT)
+# embedding_api_url = "http://localhost:8000/v1/embeddings"
+# embedding_api_model = "text-embedding-3-small"
+# embedding_query_prefix = "search_query: "
+# embedding_document_prefix = "search_document: "
+
+[qr]
+error_correction = "high"   # low | medium | quartile | high
+version = 40                # QR version 1-40 (None for auto)
+enable_compression = true
+compression_threshold = 100
+
+[video]
+codec = "prores_ks"         # ProRes — lossless intra-frame for QR
+prores_profile = "proxy"    # proxy | lt | standard | hq | 4444 | xq
+fps = 30.0
+hardware_acceleration = true
+library_log_level = "error" # FFmpeg library log level
+ffmpeg_cli_log_level = "error"
+
+[search]
+engine = "auto"             # auto | hnsw | flat
+max_results = 5
+min_score_threshold = 0.0
+
+[search.hnsw]
+max_connections = 16
+ef_construction = 200
+ef_search = 50
 ```
 
-**🎉 No feature flags needed!** Everything is built-in with intelligent auto-detection:
+Configuration priority: CLI flags > environment variables > TOML file > defaults.
 
-- ✅ **All video formats** (static FFmpeg + Pure Rust fallbacks)
-- ✅ **Auto GPU/CPU optimization** (CUDA/Metal/CPU runtime detection)  
-- ✅ **PDF processing** capabilities  
-- ✅ **QR code generation/decoding**
-- ✅ **Semantic search and vector indexing**
-- ✅ **Zero system dependencies**
+### Environment Variables
 
-**💡 One dependency, zero configuration - works optimally everywhere!**
-
-## 🚢 Deployment Scenarios
-
-### **Serverless/Lambda**
-```dockerfile
-FROM scratch
-COPY memvid-rs /
-ENTRYPOINT ["/memvid-rs"]
-# Total size: ~50MB
-```
-
-### **Kubernetes/Edge**
-```bash
-# Single binary deployment - no init containers needed
-kubectl create configmap memvid-binary --from-file=memvid-rs
-kubectl run memvid --image=alpine --command -- ./memvid-rs
-```
-
-### **IoT/Embedded**
-```bash
-# ARM cross-compilation
-cargo build --release --target aarch64-unknown-linux-gnu
-scp target/aarch64-unknown-linux-gnu/release/memvid-rs pi@raspberry:/usr/local/bin/
-```
-
-### **Air-Gapped Networks**
-```bash
-# Copy single binary - no internet required after build
-rsync -av memvid-rs secure-server:/opt/memvid/
-ssh secure-server "/opt/memvid/memvid-rs encode classified-docs.pdf"
-```
-
-## 📚 Examples
-
-### Encoding Multiple Documents
-
-```rust
-use memvid_rs::MemvidEncoder;
-
-let mut encoder = MemvidEncoder::new(None).await?;
-
-// Add multiple document types
-encoder.add_pdf("research_paper.pdf").await?;
-encoder.add_text_file("notes.txt").await?;
-encoder.add_markdown_file("README.md").await?;
-
-// Build video (no progress variant available, use standard build_video)
-let stats = encoder.build_video("knowledge_base.mp4", "index.db").await?;
-println!("Encoded {} chunks in {:.2}s", stats.total_chunks, stats.processing_time);
-```
-
-### Advanced Search
-
-```rust
-use memvid_rs::MemvidRetriever;
-
-let mut retriever = MemvidRetriever::new("knowledge_base.mp4", "index.db").await?;
-
-// Basic semantic search
-let results = retriever.search("quantum computing", 10).await?;
-
-// Search with metadata (includes chunk information)
-let detailed_results = retriever.search_with_metadata("quantum computing", 10).await?;
-
-for result in detailed_results {
-    println!("Score: {:.3} - {}", result.score, result.text);
-    if let Some(metadata) = result.metadata {
-        println!("  Source: {:?}, Frame: {:?}", metadata.source, metadata.frame);
-    }
-}
-```
-
-### Chat Interface
-
-```rust
-use memvid_rs::{quick_chat, chat_with_memory};
-
-// Quick one-off query
-let response = quick_chat(
-    "knowledge_base.mp4", 
-    "index.db", 
-    "What is quantum computing?",
-    "your-openai-api-key"
-).await?;
-
-println!("Response: {}", response);
-
-// Interactive chat session
-chat_with_memory("knowledge_base.mp4", "index.db", "your-openai-api-key").await?;
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how to get started:
-
-1. **Fork the repository**
-2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
-3. **Make your changes** and add tests
-4. **Test**:
-   ```bash
-   cargo test
-   ```
-5. **Run benchmarks**: `cargo bench`
-6. **Check formatting**: `cargo fmt`
-7. **Run lints**: `cargo clippy`
-8. **Submit a pull request**
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- Original [memvid](https://github.com/Olow304/memvid) Python implementation
-- [HuggingFace Candle](https://github.com/huggingface/candle) for TRUE BERT neural network inference in pure Rust
-- [candle-transformers](https://github.com/huggingface/candle) for real transformer model implementations
-- [instant-distance](https://github.com/instant-labs/instant-distance) for high-performance HNSW vector search
-- [qrcode-rs](https://github.com/kennytm/qrcode-rust) and [rqrr](https://github.com/WanzenBug/rqrr) for QR processing
-- [rusqlite](https://github.com/rusqlite/rusqlite) for embedded SQLite database support
-- The Rust community for the amazing pure Rust ecosystem enabling zero-dependency ML
-
-## 📞 Support
-
-- 🐛 **Bug reports**: [GitHub Issues](https://github.com/AllenDang/memvid-rs/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/AllenDang/memvid-rs/discussions)
-- 📧 **Email**: allengnr@gmail.com
-- 📖 **Documentation**: [docs.rs/memvid-rs](https://docs.rs/memvid-rs)
-
----
-
-⭐ **Star this repo** if you find it useful! It helps others discover the project.
-
-**memvid-rs** - *Encoding knowledge, one frame at a time* 🎬✨ 
+| Variable | Purpose |
+|----------|---------|
+| `MEMVID_MODEL_NAME` | Override BERT model (HuggingFace model ID) |
+| `EMBEDDING_API_URL` | Remote embedding endpoint (OpenAI-compatible) |
+| `FFMPEG_PATH` | Path to FFmpeg binary (if not in PATH) |
 
 ## Chat Integration
 
-Memvid-rs includes powerful chat functionality with both OpenAI and OpenAI-compatible API support:
+Works with any OpenAI-compatible API:
 
-### OpenAI Integration
-- Smart context retrieval using semantic search
-- Automatic fallback to context-only responses
-- Quality filtering and response enhancement
-
-### OpenAI-Compatible APIs
-- **Ollama**: Local LLM serving for privacy-focused usage
-- **LocalAI**: Self-hosted OpenAI alternative
-- **LM Studio**: Local model serving
-- **vLLM**: High-performance inference server
-- **Any OpenAI-compatible endpoint**: Just provide base URL and model
-
-### Quick Chat API
 ```rust
 use memvid_rs::{quick_chat, quick_chat_with_config};
 
-// OpenAI (cloud)
-let response = quick_chat("memory.mp4", "index.db", "Your question", "api-key").await?;
+// OpenAI
+let response = quick_chat("memory.mp4", "index.db", "question", "sk-...").await?;
 
-// Ollama (local)
+// Local LLM (Ollama, vLLM, LM Studio, LocalAI)
 let response = quick_chat_with_config(
-    "memory.mp4", "index.db", "Your question", "",
-    Some("http://localhost:11434/v1"), Some("llama2")
+    "memory.mp4", "index.db", "question", "",
+    Some("http://localhost:11434/v1"), Some("llama3"),
+    None,
 ).await?;
 ```
 
-### Interactive Chat
-```rust
-use memvid_rs::{chat_with_memory, chat_with_memory_config};
+## Architecture
 
-// OpenAI (cloud)
-chat_with_memory("memory.mp4", "index.db", "api-key").await?;
+```
+Text Documents → Chunking → BERT Embeddings → HNSW Index (SQLite)
+                    ↓
+              QR Encoding → ProRes Video (.mp4)
 
-// Ollama (local)
-chat_with_memory_config(
-    "memory.mp4", "index.db", "",
-    Some("http://localhost:11434/v1"), Some("llama2")
-).await?;
-``` 
+Search Query → BERT Embedding → HNSW Lookup → Frame Retrieval → QR Decode → Text
+```
+
+**Core modules:**
+- `api/` — Public API: `MemvidEncoder`, `MemvidRetriever`, chat functions
+- `ml/` — BERT inference via Candle, HNSW indexing, device auto-detection
+- `qr/` — QR code encoding (qrcode) and decoding (rqrr) with compression
+- `video/` — ProRes video encoding/decoding via FFmpeg, LRU frame cache
+- `text/` — Document chunking, PDF extraction
+- `storage/` — SQLite index with WAL mode and migrations
+
+## Why ProRes?
+
+Earlier versions used H.265 (HEVC), which caused QR decode failures due to inter-frame compression artifacts. ProRes is an **intra-frame** codec — each frame is independently encoded without referencing other frames. This guarantees lossless QR code preservation on every frame while still providing good compression (ProRes Proxy is ~4:1 for QR content).
+
+On Apple Silicon, ProRes encoding is hardware-accelerated via the dedicated ProRes ASIC, making it faster than software H.265 encoding.
+
+## Files Produced
+
+| File | Contents |
+|------|----------|
+| `*.mp4` | ProRes video with QR-encoded text chunks |
+| `*_index.db` | SQLite database with BERT embeddings and chunk metadata |
+
+## License
+
+MIT — see [LICENSE-MIT](LICENSE-MIT).
+
+## Acknowledgments
+
+- Original [memvid](https://github.com/Olow304/memvid) Python implementation by [Olow304](https://github.com/Olow304)
+- [HuggingFace Candle](https://github.com/huggingface/candle) for pure-Rust BERT inference
+- [instant-distance](https://github.com/instant-labs/instant-distance) for HNSW vector search
+- [qrcode-rs](https://github.com/kennytm/qrcode-rust) and [rqrr](https://github.com/WanzenBug/rqrr) for QR processing
