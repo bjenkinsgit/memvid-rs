@@ -34,7 +34,7 @@ image = "0.25"   # Pure Rust image processing
 imageproc = "0.25"  # Additional image processing algorithms
 
 # Video processing - Static FFmpeg for all formats
-ffmpeg-next = "8.0"  # Static FFmpeg - handles everything
+ffmpeg-next = "8.1"  # Static FFmpeg - handles everything (8.1 required for FFmpeg 7.2+)
 
 # Machine learning and embedding models - COMPLETE ML STACK
 candle-core = "0.8"  # Base candle support, GPU features added conditionally
