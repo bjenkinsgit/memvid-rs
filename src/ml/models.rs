@@ -318,12 +318,6 @@ impl ModelManager {
 
     /// Download a single file from HuggingFace Hub (static method to avoid borrowing issues)
     fn download_file_static(repo_id: &str, filename: &str, target_dir: &Path) -> Result<()> {
-        use hf_hub::api::sync::Api;
-
-        let api = Api::new()
-            .map_err(|e| MemvidError::MachineLearning(format!("Failed to create HF API: {}", e)))?;
-
-        let repo = api.model(repo_id.to_string());
         let target_path = target_dir.join(filename);
 
         // Skip if file already exists and is valid
@@ -331,20 +325,59 @@ impl ModelManager {
             return Ok(());
         }
 
-        match repo.get(filename) {
-            Ok(downloaded_path) => {
-                // Copy from downloaded path to target path
-                std::fs::copy(&downloaded_path, &target_path).map_err(|e| {
-                    MemvidError::MachineLearning(format!("Failed to copy file: {}", e))
-                })?;
-                log::debug!("Downloaded and copied {} to {:?}", filename, target_path);
-                Ok(())
+        // Try hf-hub API first
+        match Self::download_via_hf_hub(repo_id, filename, &target_path) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                log::debug!("hf-hub download failed for {}: {}, trying direct HTTP", filename, e);
             }
-            Err(e) => Err(MemvidError::MachineLearning(format!(
-                "Failed to download {}: {}",
-                filename, e
-            ))),
         }
+
+        // Fallback: direct HTTP download from HuggingFace via curl
+        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, filename);
+        log::info!("Downloading {} via curl", url);
+        let output = std::process::Command::new("curl")
+            .args(["-sL", "-o", &target_path.to_string_lossy(), &url])
+            .output()
+            .map_err(|e| MemvidError::MachineLearning(format!("Failed to run curl: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(MemvidError::MachineLearning(format!(
+                "curl failed for {}: {}",
+                filename, stderr
+            )));
+        }
+
+        // Verify file was actually written
+        if !target_path.exists() || target_path.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+            return Err(MemvidError::MachineLearning(format!(
+                "Downloaded file is empty: {}",
+                filename
+            )));
+        }
+
+        log::info!("Downloaded {} to {:?}", filename, target_path);
+        Ok(())
+    }
+
+    /// Try downloading via hf-hub crate API
+    fn download_via_hf_hub(repo_id: &str, filename: &str, target_path: &Path) -> Result<()> {
+        use hf_hub::api::sync::Api;
+
+        let api = Api::new()
+            .map_err(|e| MemvidError::MachineLearning(format!("Failed to create HF API: {}", e)))?;
+
+        let repo = api.model(repo_id.to_string());
+        let downloaded_path = repo.get(filename).map_err(|e| {
+            MemvidError::MachineLearning(format!("hf-hub get failed: {}", e))
+        })?;
+
+        std::fs::copy(&downloaded_path, target_path).map_err(|e| {
+            MemvidError::MachineLearning(format!("Failed to copy file: {}", e))
+        })?;
+
+        Ok(())
     }
 
     /// Validate that essential model files exist (static method)
