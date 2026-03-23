@@ -80,11 +80,37 @@ impl ModelManager {
         Ok(manager)
     }
 
+    /// Resolve hf-hub cache snapshot directory for a model.
+    /// hf-hub stores models at ~/.cache/huggingface/hub/models--<org>--<name>/snapshots/<hash>/
+    fn resolve_hf_hub_cache(hub_id: &str) -> Option<PathBuf> {
+        let hf_home = std::env::var("HF_HOME")
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                format!("{}/.cache/huggingface", home)
+            });
+        let safe_name = hub_id.replace('/', "--");
+        let model_dir = PathBuf::from(hf_home).join("hub").join(format!("models--{}", safe_name));
+        let snapshots_dir = model_dir.join("snapshots");
+        // Return the first (usually only) snapshot directory
+        if let Ok(entries) = std::fs::read_dir(&snapshots_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    // Verify it has at least config.json
+                    if path.join("config.json").exists() {
+                        log::debug!("Found hf-hub cached model at {:?}", path);
+                        return Some(path);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Register default models
     fn register_default_models(&mut self) -> Result<()> {
         // Pre-check if models already exist on disk to avoid unnecessary hf_hub API calls.
-        // download_model() stores files at cache_dir.join(name), so check both the full
-        // hub_id path (common case) and the short name path.
+        // Check: (1) memvid-rs cache, (2) hf-hub cache (from psyxe-mcp warmup or other tools)
         let mini_lm_full_dir = self
             .cache_dir
             .join("sentence-transformers/all-MiniLM-L6-v2");
@@ -94,6 +120,10 @@ impl ModelManager {
                 (true, Some(mini_lm_full_dir))
             } else if Self::validate_model_files_static(&mini_lm_short_dir).unwrap_or(false) {
                 (true, Some(mini_lm_short_dir))
+            } else if let Some(hf_dir) = Self::resolve_hf_hub_cache("sentence-transformers/all-MiniLM-L6-v2") {
+                // Found in hf-hub cache (downloaded by warmup or another tool)
+                log::info!("Using hf-hub cached model at {:?}", hf_dir);
+                (true, Some(hf_dir))
             } else {
                 (false, None)
             };
@@ -134,6 +164,8 @@ impl ModelManager {
                 (true, Some(bge_small_full_dir))
             } else if Self::validate_model_files_static(&bge_small_short_dir).unwrap_or(false) {
                 (true, Some(bge_small_short_dir))
+            } else if let Some(hf_dir) = Self::resolve_hf_hub_cache("BAAI/bge-small-en-v1.5") {
+                (true, Some(hf_dir))
             } else {
                 (false, None)
             };
@@ -214,6 +246,16 @@ impl ModelManager {
             if local_path.exists() && Self::validate_model_files_static(local_path)? {
                 log::info!("Model '{}' already cached at {:?}", name, local_path);
                 return Ok(local_path.clone());
+            }
+        }
+
+        // Check hf-hub cache before downloading (model may have been cached by warmup)
+        if let Some(hub_id) = &model.hub_id {
+            if let Some(hf_dir) = Self::resolve_hf_hub_cache(hub_id) {
+                log::info!("Model '{}' found in hf-hub cache at {:?}", name, hf_dir);
+                model.local_path = Some(hf_dir.clone());
+                model.config.cached = true;
+                return Ok(hf_dir);
             }
         }
 
