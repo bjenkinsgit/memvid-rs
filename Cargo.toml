@@ -27,7 +27,7 @@ toml = "0.8"
 
 # QR code generation and decoding
 qrcode = "0.14"  # Latest version with improved error recovery
-rqrr = "0.9"     # Latest version with better decoding performance
+rqrr = "0.10"    # Bumped from 0.9 so the internal lru dep also moves to 0.16 (closes Dependabot GHSA-rhfx-m35p-ff5j)
 
 # Image processing - PURE RUST
 image = "0.25"   # Pure Rust image processing
@@ -94,7 +94,7 @@ ndarray = "0.16"
 half = "2.4"         # Half-precision float support
 
 # Performance and caching
-lru = "0.12"         # LRU cache for frame caching
+lru = "0.16"         # LRU cache for frame caching
 
 [dev-dependencies]
 criterion = "0.5"    # Performance testing
