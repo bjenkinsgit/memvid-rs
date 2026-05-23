@@ -167,7 +167,7 @@ impl EmbeddingModel {
         if let Some(ref api_url) = config.embedding_api_url {
             log::info!("Using remote embedding API at {}", api_url);
             let client = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(120))
+                .timeout(std::time::Duration::from_secs(180))
                 .build()
                 .map_err(|e| {
                     MemvidError::MachineLearning(format!("Failed to create HTTP client: {}", e))
@@ -736,10 +736,21 @@ impl EmbeddingModel {
             data: Vec<EmbeddingData>,
         }
 
-        let body = serde_json::json!({
-            "input": texts,
-            "model": model,
-        });
+        // Strict MLX-based embedding servers (e.g. omlx running Qwen3-Embedding)
+        // hang on single-element arrays but accept bare strings. The OpenAI
+        // spec allows either, so we send a string when there's just one input
+        // and an array only when batching — broadest server compatibility.
+        let body = if texts.len() == 1 {
+            serde_json::json!({
+                "input": texts[0],
+                "model": model,
+            })
+        } else {
+            serde_json::json!({
+                "input": texts,
+                "model": model,
+            })
+        };
 
         log::debug!("Calling embedding API with {} texts", texts.len());
 
