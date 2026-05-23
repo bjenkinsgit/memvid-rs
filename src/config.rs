@@ -185,6 +185,11 @@ pub struct MlConfig {
     #[serde(default)]
     pub embedding_api_model: Option<String>,
 
+    /// Bearer token for the remote embedding API (sent as `Authorization: Bearer <key>`).
+    /// None = no authentication header sent. Required when the embedding server enforces auth.
+    #[serde(default)]
+    pub embedding_api_key: Option<String>,
+
     /// Prefix prepended to search queries for asymmetric/instruction-tuned models.
     /// Empty by default (no prefix for symmetric models like MiniLM, BGE-small).
     #[serde(default)]
@@ -380,6 +385,7 @@ impl Default for MlConfig {
             quantization: false,
             embedding_api_url: None,
             embedding_api_model: None,
+            embedding_api_key: None,
             embedding_query_prefix: None,
             embedding_document_prefix: None,
         }

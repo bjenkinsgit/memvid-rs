@@ -60,6 +60,8 @@ pub struct EmbeddingConfig {
     pub embedding_api_url: Option<String>,
     /// Model name for remote embedding API
     pub embedding_api_model: Option<String>,
+    /// Bearer token for the remote embedding API. None = unauthenticated.
+    pub embedding_api_key: Option<String>,
     /// Prefix prepended to search queries (for asymmetric/instruction-tuned models)
     pub query_prefix: String,
     /// Prefix prepended to document chunks during indexing
@@ -87,6 +89,7 @@ impl Default for EmbeddingConfig {
             device_type,
             embedding_api_url: None,
             embedding_api_model: None,
+            embedding_api_key: None,
             query_prefix: String::new(),
             document_prefix: String::new(),
         }
@@ -105,6 +108,7 @@ impl EmbeddingConfig {
             batch_size: ml.batch_size,
             embedding_api_url: ml.embedding_api_url.clone(),
             embedding_api_model: ml.embedding_api_model.clone(),
+            embedding_api_key: ml.embedding_api_key.clone(),
             query_prefix: ml.embedding_query_prefix.clone().unwrap_or_default(),
             document_prefix: ml.embedding_document_prefix.clone().unwrap_or_default(),
             ..Default::default()
@@ -141,6 +145,8 @@ pub struct EmbeddingModel {
     api_url: Option<String>,
     /// Model name for remote API requests
     api_model: Option<String>,
+    /// Bearer token for remote API requests. None = no Authorization header sent.
+    api_key: Option<String>,
     /// Prefix prepended to search queries (for asymmetric/instruction-tuned models)
     query_prefix: String,
     /// Prefix prepended to document chunks during indexing
@@ -190,6 +196,7 @@ impl EmbeddingModel {
             return Ok(Self {
                 api_url: Some(api_url.clone()),
                 api_model: config.embedding_api_model.clone(),
+                api_key: config.embedding_api_key.clone(),
                 api_client: Some(client),
                 remote_dimension: 0, // discovered from first API response
                 query_prefix: config.query_prefix.clone(),
@@ -246,6 +253,7 @@ impl EmbeddingModel {
                 remote_dimension: 0,
                 api_url: None,
                 api_model: None,
+                api_key: None,
             });
             } // else (model name matches)
         }
@@ -287,6 +295,7 @@ impl EmbeddingModel {
             remote_dimension: 0,
             api_url: None,
             api_model: None,
+            api_key: None,
         };
 
         // Try to load the model
@@ -734,15 +743,17 @@ impl EmbeddingModel {
 
         log::debug!("Calling embedding API with {} texts", texts.len());
 
+        let api_key = self.api_key.clone();
+
         // Bridge sync → async: we're inside a tokio runtime, so use
         // block_in_place to avoid blocking the executor thread.
         let resp = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                client
-                    .post(&url)
-                    .json(&body)
-                    .send()
-                    .await
+                let mut req = client.post(&url).json(&body);
+                if let Some(ref key) = api_key {
+                    req = req.bearer_auth(key);
+                }
+                req.send().await
             })
         })
         .map_err(|e| {
