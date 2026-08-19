@@ -54,8 +54,8 @@ instant-distance = "0.6"   # Fast approximate nearest neighbor search
 rusqlite = { version = "0.32", features = ["bundled"] }  # Embedded SQLite database - zero system deps
 
 # PDF processing - Built-in by default
-pdf-extract = "0.9"  # Text extraction
-lopdf = "0.36"       # PDF operations
+pdf-extract = "0.12" # Text extraction
+lopdf = "0.42"       # PDF operations (0.42+ fixes RUSTSEC-2026-0187 nested-object stack overflow)
 
 # Text processing
 regex = "1.11"
